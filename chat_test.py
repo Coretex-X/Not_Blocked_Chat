@@ -27,27 +27,32 @@ INCOMING_FILES_FOLDER = "incoming_files1"
 if not os.path.exists(INCOMING_FILES_FOLDER):
     os.makedirs(INCOMING_FILES_FOLDER)
 
+# Папка assets для Flet
+ASSETS_FOLDER = "assets"
+if not os.path.exists(ASSETS_FOLDER):
+    os.makedirs(ASSETS_FOLDER)
+
 id_user = 3
 guest_id = 4
 
 CURRENT_USER = {
     "id": id_user,
-    "name": "Я",  # ← Измени свое имя тут
-    "avatar_color": ft.Colors.BLUE,
-    "phone": "+7 900 123-45-67",
-    "status": "В сети",
-    "about": "Это я"
+    "name": "None",  # ← Измени свое имя тут
+    "avatar_color": ft.Colors.GREY,
+    "phone": "None",
+    "status": "None",
+    "about": "None"
 }
 
 # Данные собеседника (с кем переписываемся)
 CONTACT_USER = {
     "id": guest_id,
-    "name": "Друг",  # ← Измени имя собеседника тут
-    "avatar_color": ft.Colors.GREEN,
-    "phone": "+7 900 111-22-33",
-    "status": "В сети",
-    "about": "Мой друг",
-    "last_seen": "только что"
+    "name": "None",  # ← Измени имя собеседника тут
+    "avatar_color": ft.Colors.GREY,
+    "phone": "None",
+    "status": "None",
+    "about": "None",
+    "last_seen": "None"
 }
 
 # Настройки чата
@@ -124,7 +129,7 @@ def receive_messages():
                         "file_name": metadata.get("file_name", "unknown"),
                         "file_type": metadata.get("file_type", "unknown"),
                         "file_size": metadata.get("file_size", len(file_data)),
-                        "file_data": base64.b64encode(file_data).decode('utf-8'),  # Кодируем в base64 для очереди
+                        "file_data": base64.b64encode(file_data).decode('utf-8'),
                         "sender_id": metadata.get("sender_id", None)
                     }
                     
@@ -235,6 +240,19 @@ def main(page: ft.Page):
             except Exception as e:
                 print(f"Ошибка автосохранения: {e}")
         return file_path
+
+        # Проверка прав доступа к файлам
+    def check_file_permissions(file_path):
+        try:
+            abs_path = os.path.abspath(file_path)
+            print(f"🔍 Проверка файла: {abs_path}")
+            print(f"📁 Существует: {os.path.exists(abs_path)}")
+            print(f"📖 Читаемый: {os.access(abs_path, os.R_OK)}")
+            print(f"📝 Размер: {os.path.getsize(abs_path)} байт")
+            return True
+        except Exception as e:
+            print(f"❌ Ошибка проверки файла: {e}")
+            return False
     
     # Диалог выбора папки для автосохранения
     def show_download_folder_dialog(e):
@@ -478,15 +496,23 @@ def main(page: ft.Page):
         send_button.update()
     
     # Функция удаления сообщения
-    def delete_message(message_widget):
+    def delete_message(message_widget, message_text=""):
         try:
             if message_widget in messages_column.controls:
+                # Генерируем ID для сообщения (используем текст + время)
+                message_id = f"msg_{datetime.datetime.now().timestamp()}_{hash(message_text)}"
+                
+                # Отправляем команду удаления второму пользователю
+                send_delete_command(message_id, message_text)
+                
+                # Удаляем у себя
                 messages_column.controls.remove(message_widget)
                 if message_widget in all_messages:
                     all_messages.remove(message_widget)
                 messages_column.update()
+                
                 page.open(
-                    ft.SnackBar(content=ft.Text("✅ Сообщение удалено"), duration=2000)
+                    ft.SnackBar(content=ft.Text("✅ Сообщение удалено у всех"), duration=2000)
                 )
                 page.update()
         except Exception as e:
@@ -498,7 +524,7 @@ def main(page: ft.Page):
             page.close(menu_dialog)
         
         def delete_action(e):
-            delete_message(message_widget)
+            delete_message(message_widget, message_text)  # Передаём текст сообщения
             page.close(menu_dialog)
         
         def copy_action(e):
@@ -876,37 +902,53 @@ def main(page: ft.Page):
         
         return clickable_message
     
-    # Функция для создания сообщения с аудио (с прогресс-баром)
+           # Функция для создания сообщения с аудио
+        # Функция для создания сообщения с аудио (с прогресс-баром и перемоткой)
     def create_audio_message(audio_path: str, file_name: str, is_user: bool = True, one_time_view: bool = False):
         # Создаем аватар с фото или текстом
         user_data = CURRENT_USER if is_user else CONTACT_USER
         avatar = create_avatar_widget(user_data)
         
-        # Если одноразовый просмотр, добавляем иконку
-        display_name = f"" if one_time_view else file_name
+        # Получаем абсолютный путь к файлу
+        absolute_path = os.path.abspath(audio_path)
+        print(f"🎵 Абсолютный путь к аудио: {absolute_path}")
         
-        # Создаем аудио элемент (работающий!)
+        # Проверяем существует ли файл
+        if not os.path.exists(absolute_path):
+            print(f"❌ Аудио файл не найден: {absolute_path}")
+            return create_document_message(absolute_path, f"❌ {file_name}", "Файл не найден", is_user)
+        
+        # Получаем размер файла
         try:
-            # Используем стандартный HTML audio через data URL
-            import base64
-            with open(audio_path, 'rb') as f:
-                audio_data = f.read()
-            audio_base64 = base64.b64encode(audio_data).decode()
-            audio_src = f"data:audio/mpeg;base64,{audio_base64}"
+            file_size = os.path.getsize(absolute_path)
+            if file_size < 1024 * 1024:
+                size_text = f"{file_size / 1024:.1f} КБ"
+            else:
+                size_text = f"{file_size / (1024 * 1024):.1f} МБ"
         except:
-            audio_src = audio_path
+            size_text = "?"
         
         # Состояние воспроизведения
         is_playing = [False]
         current_position = [0]  # В секундах
-        duration = [120]  # Примерная длительность в секундах
+        duration = [180]  # Примерная длительность (3 минуты)
         timer_thread = [None]
+        audio_element = [None]
+        
+        # Пытаемся определить длительность по размеру файла (примерно)
+        try:
+            # Для MP3: примерно 1 МБ = 1 минута (очень грубо)
+            estimated_duration = file_size / (1024 * 1024) * 60
+            duration[0] = max(30, min(600, int(estimated_duration)))  # От 30 сек до 10 мин
+        except:
+            duration[0] = 180  # 3 минуты по умолчанию
+        
+        print(f"⏱️ Примерная длительность: {duration[0]} секунд")
         
         # UI элементы
         play_button = [None]
         progress_slider = [None]
         time_text = [None]
-        audio_element = [None]
         
         # Форматирование времени
         def format_time(seconds):
@@ -914,13 +956,14 @@ def main(page: ft.Page):
             secs = int(seconds % 60)
             return f"{minutes}:{secs:02d}"
         
-        # Получаем длительность аудио (примерно)
-        try:
-            file_size = os.path.getsize(audio_path)
-            # Примерная оценка: 1 МБ ≈ 60 секунд для MP3
-            duration[0] = max(30, min(300, file_size / (1024 * 1024) * 60))
-        except:
-            duration[0] = 60
+        # Создаем аудио элемент
+        audio = ft.Audio(
+            src=absolute_path,
+            autoplay=False,
+            volume=1,
+        )
+        audio_element[0] = audio
+        page.overlay.append(audio)
         
         # Обработчик изменения позиции слайдера (перемотка)
         def on_slider_change(e):
@@ -937,22 +980,25 @@ def main(page: ft.Page):
                 current_position[0] = new_position
                 # Перематываем аудио
                 try:
-                    audio_element[0].seek(int(new_position * 1000))  # В миллисекундах
+                    # Конвертируем секунды в миллисекунды для seek
+                    audio_element[0].seek(int(new_position * 1000))
                     time_text[0].value = f"{format_time(current_position[0])} / {format_time(duration[0])}"
                     time_text[0].update()
+                    print(f"⏩ Перемотка на {format_time(current_position[0])}")
                 except Exception as ex:
                     print(f"Ошибка перемотки: {ex}")
         
         # Обновление прогресса
         def update_progress():
-            import threading
             if is_playing[0] and current_position[0] < duration[0]:
                 current_position[0] += 0.5
-                if current_position[0] > duration[0]:
+                if current_position[0] >= duration[0]:
                     current_position[0] = duration[0]
                     is_playing[0] = False
                     play_button[0].icon = ft.Icons.PLAY_ARROW
+                    play_button[0].tooltip = "Воспроизвести"
                     play_button[0].update()
+                    print("🎵 Воспроизведение завершено")
                 
                 progress_slider[0].value = current_position[0]
                 time_text[0].value = f"{format_time(current_position[0])} / {format_time(duration[0])}"
@@ -964,41 +1010,42 @@ def main(page: ft.Page):
                     timer_thread[0] = threading.Timer(0.5, update_progress)
                     timer_thread[0].start()
         
-        # Кнопка Play/Pause с реальным audio
+        # Кнопка Play/Pause
         def toggle_play(e):
-            if is_playing[0]:
-                # Пауза
-                is_playing[0] = False
-                play_button[0].icon = ft.Icons.PLAY_ARROW
-                if timer_thread[0]:
-                    timer_thread[0].cancel()
-                if audio_element[0]:
-                    audio_element[0].pause()
-            else:
-                # Воспроизведение
-                is_playing[0] = True
-                play_button[0].icon = ft.Icons.PAUSE
-                if audio_element[0]:
-                    if current_position[0] == 0:
-                        audio_element[0].play()
-                    else:
-                        audio_element[0].resume()
-                update_progress()
-            play_button[0].update()
+            try:
+                if is_playing[0]:
+                    # Пауза
+                    is_playing[0] = False
+                    play_button[0].icon = ft.Icons.PLAY_ARROW
+                    play_button[0].tooltip = "Воспроизвести"
+                    if timer_thread[0]:
+                        timer_thread[0].cancel()
+                    if audio_element[0]:
+                        audio_element[0].pause()
+                    print("🎵 Пауза")
+                else:
+                    # Воспроизведение
+                    is_playing[0] = True
+                    play_button[0].icon = ft.Icons.PAUSE
+                    play_button[0].tooltip = "Пауза"
+                    if audio_element[0]:
+                        if current_position[0] == 0:
+                            audio_element[0].play()
+                        else:
+                            # Продолжаем с текущей позиции
+                            audio_element[0].resume()
+                    print(f"🎵 Воспроизведение с {format_time(current_position[0])}")
+                    update_progress()
+                play_button[0].update()
+            except Exception as ex:
+                print(f"❌ Ошибка воспроизведения: {ex}")
         
-        # Создаем Audio элемент (скрытый)
-        audio = ft.Audio(
-            src=audio_path,
-            autoplay=False,
-            volume=1,
-        )
-        audio_element[0] = audio
-        page.overlay.append(audio)
-        
+        # Создаем кнопку воспроизведения
         play_btn = ft.IconButton(
             icon=ft.Icons.PLAY_ARROW,
             icon_color=ft.Colors.WHITE,
             icon_size=30,
+            tooltip="Воспроизвести",
             on_click=toggle_play,
         )
         play_button[0] = play_btn
@@ -1008,6 +1055,7 @@ def main(page: ft.Page):
             min=0,
             max=duration[0],
             value=0,
+            divisions=100,
             active_color=ft.Colors.WHITE,
             inactive_color=ft.Colors.WHITE38,
             thumb_color=ft.Colors.WHITE,
@@ -1021,19 +1069,11 @@ def main(page: ft.Page):
             f"0:00 / {format_time(duration[0])}",
             color=ft.Colors.WHITE70,
             size=11,
+            weight=ft.FontWeight.BOLD,
         )
         time_text[0] = time_display
         
-        # Получаем размер файла
-        try:
-            file_size = os.path.getsize(audio_path)
-            if file_size < 1024 * 1024:
-                size_text = f"{file_size / 1024:.1f} КБ"
-            else:
-                size_text = f"{file_size / (1024 * 1024):.1f} МБ"
-        except:
-            size_text = ""
-        
+        # Контейнер с аудио
         audio_bubble = ft.Container(
             content=ft.Column(
                 [
@@ -1043,7 +1083,7 @@ def main(page: ft.Page):
                             ft.Column(
                                 [
                                     ft.Text(
-                                        display_name,
+                                        file_name if not one_time_view else "🔊 Голосовое сообщение",
                                         color=ft.Colors.WHITE,
                                         weight=ft.FontWeight.BOLD,
                                         size=13,
@@ -1064,8 +1104,8 @@ def main(page: ft.Page):
                                 icon_color=ft.Colors.WHITE,
                                 icon_size=20,
                                 tooltip="Скачать",
-                                on_click=lambda e: download_file(audio_path, file_name),
-                            ) if not one_time_view else ft.Container(),  # Скрываем скачивание для одноразовых
+                                on_click=lambda e: download_file(absolute_path, file_name),
+                            ) if not one_time_view else ft.Container(),
                         ],
                         spacing=5,
                     ),
@@ -1091,7 +1131,7 @@ def main(page: ft.Page):
             padding=10,
             border_radius=15,
             margin=ft.margin.only(right=10) if is_user else ft.margin.only(left=10),
-            width=300,
+            width=350,  # Немного шире для прогресс-бара
         )
         
         # Создаем строку сообщения
@@ -1117,7 +1157,7 @@ def main(page: ft.Page):
         # Делаем кликабельным для меню
         clickable_message = ft.GestureDetector(
             content=message_row,
-            on_long_press_start=lambda e: show_message_menu(e, clickable_message, f"🎵 Аудио", is_user),
+            on_long_press_start=lambda e: show_message_menu(e, clickable_message, f"🎵 Аудио: {file_name}", is_user),
         )
         
         return clickable_message
@@ -1281,7 +1321,6 @@ def main(page: ft.Page):
         if message_input.value.strip():
             # Отправляем текстовое сообщение
             msg_data = {
-                "type": "text",
                 "message": message_input.value,
                 "sender_id": CURRENT_USER["id"]
             }
@@ -1310,6 +1349,7 @@ def main(page: ft.Page):
             send_button.update()
             
             messages_column.scroll_to(offset=-1, duration=300)
+            page.update()(offset=-1, duration=300)
             page.update()
 
 
@@ -1367,6 +1407,28 @@ def main(page: ft.Page):
             traceback.print_exc()
             return False
     
+    def send_delete_command(message_id, message_text):
+        """
+        Отправляет команду на удаление сообщения второму пользователю
+        """
+        try:
+            delete_data = {
+                "type": "delete",
+                "message_id": message_id,
+                "message_text": message_text,  # Для идентификации
+                "sender_id": CURRENT_USER["id"],
+                "timestamp": datetime.datetime.now().timestamp()
+            }
+            
+            # Отправляем через WebSocket
+            ws.send(json.dumps(delete_data))
+            print(f"🗑️ Команда удаления отправлена для сообщения: {message_text[:30]}...")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Ошибка отправки команды удаления: {e}")
+            return False
+
     # ===================================================================
     # ПУБЛИЧНЫЕ ФУНКЦИИ ДЛЯ WEBSOCKET - ДОБАВЛЕНИЕ ВХОДЯЩИХ СООБЩЕНИЙ
     # ===================================================================
@@ -1942,39 +2004,39 @@ def main(page: ft.Page):
 
     # Добавляем начальные сообщения с данными пользователей
     # Добавляем начальные сообщения с данными пользователей
-    initial_messages = [
+    '''initial_messages = [
         create_chat_message("Привет! Как дела?", is_user=False),
         create_chat_message("Привет! Все отлично, спасибо! А у тебя?", is_user=True),
         create_chat_message("Тоже всё хорошо! Что нового?", is_user=False),
     ]
     messages_column.controls.extend(initial_messages)
-    all_messages.extend(initial_messages)
+    all_messages.extend(initial_messages)'''
 
     def check_messages():
-            try:
-                while not message_queue.empty():
-                    msg = message_queue.get_nowait()
+        try:
+            while not message_queue.empty():
+                msg = message_queue.get_nowait()
+                
+                # Проверяем тип сообщения
+                if "type" in msg and msg["type"] == "file":
+                    # Это файл!
+                    handle_incoming_file(msg)
+                else:
+                    # Это текстовое сообщение
+                    sender_id = msg.get("sender_id")
+                    text = msg.get("message")
                     
-                    # Проверяем тип сообщения
-                    if "type" in msg and msg["type"] == "file":
-                        # Это файл!
-                        handle_incoming_file(msg)
-                    else:
-                        # Это текстовое сообщение
-                        sender_id = msg.get("sender_id")
-                        text = msg.get("message")
+                    if text and sender_id == CONTACT_USER["id"]:
+                        msg_widget = create_chat_message(text, is_user=False)
+                        messages_column.controls.append(msg_widget)
+                        all_messages.append(msg_widget)
+                        messages_column.scroll_to(offset=-1, duration=300)
+                        page.update()
+                        print(f"📨 Получено сообщение от друга: {text}")
                         
-                        if text and sender_id == CONTACT_USER["id"]:
-                            msg_widget = create_chat_message(text, is_user=False)
-                            messages_column.controls.append(msg_widget)
-                            all_messages.append(msg_widget)
-                            messages_column.scroll_to(offset=-1, duration=300)
-                            page.update()
-                            print(f"📨 Получено сообщение от друга: {text}")
-                        
-            except queue.Empty:
-                pass
-            threading.Timer(0.5, check_messages).start()
+        except queue.Empty:
+            pass
+        threading.Timer(0.5, check_messages).start()
 
     def handle_incoming_file(file_msg):
         """Обрабатывает входящий файл"""
@@ -2001,6 +2063,10 @@ def main(page: ft.Page):
                 f.write(file_data)
             
             print(f"💾 Файл сохранен: {file_path}")
+            check_file_permissions(file_path)  # Добавь эту строку
+            asset_path = os.path.join(ASSETS_FOLDER, os.path.basename(file_path))
+            shutil.copy2(file_path, asset_path)
+            print(f"📁 Файл скопирован в assets: {asset_path}")
             
             # Показываем в чате (только если файл от друга!)
             if sender_id == CONTACT_USER["id"]:

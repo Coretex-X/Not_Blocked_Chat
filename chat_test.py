@@ -1,3 +1,7 @@
+"""
+Chat Messenger — чистая и читаемая версия
+"""
+
 import flet as ft
 import datetime
 import os
@@ -9,234 +13,259 @@ import websocket
 import threading
 import queue
 
-# Папка для входящих файлов
-INCOMING_FILES_FOLDER = "incoming_files1"
-if not os.path.exists(INCOMING_FILES_FOLDER):
-    os.makedirs(INCOMING_FILES_FOLDER)
+# ─────────────────────────── Константы ────────────────────────────────────────
 
-# Папка assets для Flet
-ASSETS_FOLDER = "assets"
-if not os.path.exists(ASSETS_FOLDER):
-    os.makedirs(ASSETS_FOLDER)
+INCOMING_FOLDER = "incoming_files1"
+ASSETS_FOLDER   = "assets"
+VOICE_FOLDER    = "voice_recordings"
+SETTINGS_FILE   = "chat_settings.json"
+WS_URL_DATA     = "ws://127.0.0.1:5000/ws/data/"
+WS_URL_CHAT     = "ws://127.0.0.1:5000/ws/chat_user/api87/"
+FILE_SEPARATOR  = b"|||BINARY_DATA|||"
+MAX_FILE_SIZE   = 50 * 1024 * 1024  # 50 МБ
 
-id_user = 3
-guest_id = 4
+IMAGE_EXTS  = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+VIDEO_EXTS  = {".mp4", ".avi", ".mov", ".mkv", ".webm"}
+AUDIO_EXTS  = {".mp3", ".wav", ".ogg", ".m4a"}
+
+for folder in (INCOMING_FOLDER, ASSETS_FOLDER, VOICE_FOLDER):
+    os.makedirs(folder, exist_ok=True)
+
+# ─────────────────────────── Данные пользователей ─────────────────────────────
+
+MY_ID      = 4
+CONTACT_ID = 3
 
 CURRENT_USER = {
-    "id": id_user,
-    "name": "None",
-    "avatar_color": ft.Colors.GREY,
-    "phone": "None",
-    "status": "None",
-    "about": "None"
-}
-
-CONTACT_USER = {
-    "id": guest_id,
+    "id": MY_ID,
     "name": "None",
     "avatar_color": ft.Colors.GREY,
     "phone": "None",
     "status": "None",
     "about": "None",
-    "last_seen": "None"
 }
 
-CHAT_CONFIG = {
-    "room_id": "lobbi_1",
-    "theme": "light",
-    "notifications": True
+CONTACT_USER = {
+    "id": CONTACT_ID,
+    "name": "None",
+    "avatar_color": ft.Colors.GREY,
+    "phone": "None",
+    "status": "None",
+    "about": "None",
+    "last_seen": "None",
 }
 
-message_queue = queue.Queue()
-ws = None
+# ─────────────────────────── WebSocket ────────────────────────────────────────
+
+message_queue: queue.Queue = queue.Queue()
+ws: websocket.WebSocket | None = None
 running = True
 
 
-# Аутентификация на сервере
 def authenticate():
-    ws_auth = websocket.WebSocket()
-    ws_auth.connect("ws://127.0.0.1:5000/ws/data/")
-    ws_auth.send(json.dumps({
+    """Регистрирует чат-комнату на сервере."""
+    conn = websocket.WebSocket()
+    conn.connect(WS_URL_DATA)
+    conn.send(json.dumps({
         "room": "lobbi_1",
-        "user_id": id_user,
-        "guest_id": guest_id,
+        "user_id": MY_ID,
+        "guest_id": CONTACT_ID,
         "status_chat": "existing_chat",
-        "token": "api87"
+        "token": "api87",
     }))
-    ws_auth.close()
+    conn.close()
 
 
-authenticate()
-
-ws = websocket.WebSocket()
-ws.connect("ws://127.0.0.1:5000/ws/chat_user/api87/")
-
-
-# Получение сообщений из WebSocket и помещение их в очередь
 def receive_messages():
+    """Фоновый поток: читает сообщения из WebSocket и кладёт в очередь."""
     global running
     while running:
         try:
-            message = ws.recv()
-            try:
-                message_data = json.loads(message)
-                message_queue.put(message_data)
-            except:
-                separator = b"|||BINARY_DATA|||"
-                separator_index = message.find(separator)
-                if separator_index != -1:
-                    metadata_bytes = message[:separator_index]
-                    file_data = message[separator_index + len(separator):]
-                    metadata = json.loads(metadata_bytes.decode('utf-8'))
-                    file_message = {
-                        "type": "file",
-                        "file_name": metadata.get("file_name", "unknown"),
-                        "file_type": metadata.get("file_type", "unknown"),
-                        "file_size": metadata.get("file_size", len(file_data)),
-                        "file_data": base64.b64encode(file_data).decode('utf-8'),
-                        "sender_id": metadata.get("sender_id", None)
-                    }
-                    message_queue.put(file_message)
-                else:
-                    print("❌ Не удалось найти разделитель в бинарных данных")
+            raw = ws.recv()
 
+            # Если данные текстовые — это JSON-сообщение
+            if isinstance(raw, str):
+                message_queue.put(json.loads(raw))
+
+            # Если данные бинарные — это файл: метаданные + разделитель + байты файла
+            elif isinstance(raw, bytes):
+                sep_pos = raw.find(FILE_SEPARATOR)
+                if sep_pos == -1:
+                    print("❌ Не найден разделитель в бинарных данных")
+                    continue
+                metadata   = json.loads(raw[:sep_pos].decode("utf-8"))
+                file_bytes = raw[sep_pos + len(FILE_SEPARATOR):]
+                message_queue.put({
+                    "type":      "file",
+                    "file_name": metadata.get("file_name", "unknown"),
+                    "file_type": metadata.get("file_type", "unknown"),
+                    "file_size": metadata.get("file_size", len(file_bytes)),
+                    "file_data": base64.b64encode(file_bytes).decode("utf-8"),
+                    "sender_id": metadata.get("sender_id"),
+                })
         except websocket.WebSocketConnectionClosedException:
             print("❌ WebSocket соединение закрыто")
             break
         except Exception as e:
-            print(f"❌ Ошибка в receive_messages: {e}")
             import traceback
+            print(f"❌ Ошибка получения сообщения: {e}")
             traceback.print_exc()
             break
 
 
-thread = threading.Thread(target=receive_messages, daemon=True)
-thread.start()
+# Запускаем соединение и фоновый поток
+authenticate()
+ws = websocket.WebSocket()
+ws.connect(WS_URL_CHAT)
+threading.Thread(target=receive_messages, daemon=True).start()
 
+
+# ─────────────────────────── Вспомогательные функции ──────────────────────────
+
+def get_file_ext(filename: str) -> str:
+    return os.path.splitext(filename)[1].lower()
+
+
+def get_file_type(filename: str) -> str:
+    ext = get_file_ext(filename)
+    if ext in IMAGE_EXTS:  return "image"
+    if ext in VIDEO_EXTS:  return "video"
+    if ext in AUDIO_EXTS:  return "audio"
+    return "document"
+
+
+def format_file_size(path: str) -> str:
+    try:
+        size = os.path.getsize(path)
+        if size < 1024:             return f"{size} Б"
+        if size < 1024 * 1024:      return f"{size / 1024:.1f} КБ"
+        return f"{size / (1024 * 1024):.1f} МБ"
+    except Exception:
+        return "?"
+
+
+def format_time_seconds(seconds: float) -> str:
+    return f"{int(seconds // 60)}:{int(seconds % 60):02d}"
+
+
+def now_hm() -> str:
+    return datetime.datetime.now().strftime("%H:%M")
+
+
+# ─────────────────────────── Главная функция ──────────────────────────────────
 
 def main(page: ft.Page):
-    page.title = "WhatsApp-like Chat"
+    page.title      = "Chat Messenger"
     page.theme_mode = ft.ThemeMode.LIGHT
-    page.padding = 0
+    page.padding    = 0
 
-    messages_column = ft.Column(scroll=ft.ScrollMode.ALWAYS, expand=True)
-    all_messages = []
-    sent_media_files = []
-    viewed_one_time_messages = []
+    # Списки сообщений
+    messages_column   = ft.Column(scroll=ft.ScrollMode.ALWAYS, expand=True)
+    all_messages:      list = []
+    sent_media_files:  list = []
+    viewed_once_ids:   list = []
 
-    mic_button = None
-    send_button = None
-    attach_button = None
+    # Настройки автосохранения
+    auto_save_folder: list[str | None] = [None]  # обёртка в list для изменения в closure
 
-    settings_file = "chat_settings.json"
-    auto_download_folder = None
+    # ── Настройки ──────────────────────────────────────────────────────────────
 
-    voice_recordings_folder = "voice_recordings"
-    if not os.path.exists(voice_recordings_folder):
-        os.makedirs(voice_recordings_folder)
-
-    # Загрузка настроек автосохранения из файла
     def load_settings():
-        nonlocal auto_download_folder
         try:
-            if os.path.exists(settings_file):
-                with open(settings_file, 'r', encoding='utf-8') as f:
-                    settings = json.load(f)
-                    auto_download_folder = settings.get('auto_download_folder')
-        except:
+            if os.path.exists(SETTINGS_FILE):
+                with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    auto_save_folder[0] = data.get("auto_download_folder")
+        except Exception:
             pass
 
-    # Сохранение настроек автосохранения в файл
     def save_settings():
         try:
-            settings = {'auto_download_folder': auto_download_folder}
-            with open(settings_file, 'w', encoding='utf-8') as f:
-                json.dump(settings, f, ensure_ascii=False)
-        except:
+            with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+                json.dump({"auto_download_folder": auto_save_folder[0]}, f, ensure_ascii=False)
+        except Exception:
             pass
 
     load_settings()
 
-    # Создание виджета аватара пользователя с первой буквой имени
-    def create_avatar_widget(user_data, size=40, is_circle=True):
-        name = user_data.get("name", "?")
-        letter = name[0].upper() if name else "?"
+    # ── Утилиты UI ─────────────────────────────────────────────────────────────
+
+    def make_avatar(user_data: dict, size: int = 40) -> ft.CircleAvatar:
+        """Создаёт круглый аватар с первой буквой имени."""
+        letter = (user_data.get("name") or "?")[0].upper()
         return ft.CircleAvatar(
             content=ft.Text(letter, size=size // 2),
             bgcolor=user_data.get("avatar_color", ft.Colors.GREY),
             radius=size // 2,
         )
 
-    # Автоматическое копирование файла в папку автосохранения
-    def auto_save_file(file_path, file_name):
-        if auto_download_folder and os.path.exists(auto_download_folder):
-            try:
-                dest_path = os.path.join(auto_download_folder, file_name)
-                counter = 1
-                while os.path.exists(dest_path):
-                    name, ext = os.path.splitext(file_name)
-                    dest_path = os.path.join(auto_download_folder, f"{name}_{counter}{ext}")
-                    counter += 1
-                shutil.copy2(file_path, dest_path)
-                return dest_path
-            except Exception as e:
-                print(f"❌ Ошибка автосохранения: {e}")
-        return file_path
-
-    # Проверка существования и читаемости файла
-    def check_file_permissions(file_path):
-        try:
-            abs_path = os.path.abspath(file_path)
-            return os.path.exists(abs_path) and os.access(abs_path, os.R_OK)
-        except Exception as e:
-            print(f"❌ Ошибка проверки файла: {e}")
-            return False
-
-    # Диалог выбора папки для автосохранения входящих файлов
-    def show_download_folder_dialog(e):
-        def folder_picked(e: ft.FilePickerResultEvent):
-            nonlocal auto_download_folder
-            if e.path:
-                auto_download_folder = e.path
-                save_settings()
-                page.open(ft.SnackBar(content=ft.Text(f"Папка для сохранения: {auto_download_folder}")))
-                page.update()
-
-        folder_picker = ft.FilePicker(on_result=folder_picked)
-        page.overlay.append(folder_picker)
+    def show_snack(text: str):
+        page.open(ft.SnackBar(content=ft.Text(text), duration=2000))
         page.update()
-        folder_picker.get_directory_path(dialog_title="Выберите папку для автосохранения файлов")
 
-    # Диалог сохранения файла вручную через FilePicker
-    def download_file(file_path, file_name):
+    def scroll_to_bottom():
+        messages_column.scroll_to(offset=-1, duration=300)
+
+    def add_message_to_chat(widget):
+        messages_column.controls.append(widget)
+        all_messages.append(widget)
+        scroll_to_bottom()
+        page.update()
+
+    # ── Файловые операции ──────────────────────────────────────────────────────
+
+    def auto_save_file(src: str, filename: str) -> str:
+        """Копирует файл в папку автосохранения, если она задана."""
+        folder = auto_save_folder[0]
+        if not folder or not os.path.exists(folder):
+            return src
+        dest = os.path.join(folder, filename)
+        counter = 1
+        while os.path.exists(dest):
+            name, ext = os.path.splitext(filename)
+            dest = os.path.join(folder, f"{name}_{counter}{ext}")
+            counter += 1
         try:
-            def save_file_result(e: ft.FilePickerResultEvent):
-                if e.path:
-                    try:
-                        shutil.copy2(file_path, e.path)
-                        page.open(ft.SnackBar(content=ft.Text(f"Файл сохранен: {e.path}")))
-                        page.update()
-                    except Exception as ex:
-                        page.open(ft.SnackBar(content=ft.Text(f"Ошибка сохранения: {str(ex)}")))
-                        page.update()
-
-            save_picker = ft.FilePicker(on_result=save_file_result)
-            page.overlay.append(save_picker)
-            page.update()
-            save_picker.save_file(file_name=file_name, dialog_title="Сохранить файл как")
+            shutil.copy2(src, dest)
+            return dest
         except Exception as e:
-            page.open(ft.SnackBar(content=ft.Text(f"Ошибка: {str(e)}")))
-            page.update()
+            print(f"❌ Ошибка автосохранения: {e}")
+            return src
 
-    # Открытие изображения на весь экран в диалоговом окне
-    def open_image_fullscreen(image_path, file_name):
-        def close_dialog(e):
-            page.close(image_dialog)
+    def download_file(file_path: str, file_name: str):
+        """Диалог сохранения файла через FilePicker."""
+        def on_save(e: ft.FilePickerResultEvent):
+            if e.path:
+                try:
+                    shutil.copy2(file_path, e.path)
+                    show_snack(f"Файл сохранён: {e.path}")
+                except Exception as ex:
+                    show_snack(f"Ошибка сохранения: {ex}")
 
-        def download_action(e):
-            download_file(image_path, file_name)
+        picker = ft.FilePicker(on_result=on_save)
+        page.overlay.append(picker)
+        page.update()
+        picker.save_file(file_name=file_name, dialog_title="Сохранить файл как")
 
-        image_dialog = ft.AlertDialog(
+    def select_auto_save_folder(e):
+        """Диалог выбора папки для автосохранения."""
+        def on_folder_picked(e: ft.FilePickerResultEvent):
+            if e.path:
+                auto_save_folder[0] = e.path
+                save_settings()
+                show_snack(f"Папка для сохранения: {e.path}")
+
+        picker = ft.FilePicker(on_result=on_folder_picked)
+        page.overlay.append(picker)
+        page.update()
+        picker.get_directory_path(dialog_title="Выберите папку для автосохранения")
+
+    # ── Диалоговые окна просмотра ──────────────────────────────────────────────
+
+    def open_image_fullscreen(image_path: str, file_name: str):
+        def close(e): page.close(dlg)
+
+        dlg = ft.AlertDialog(
             content=ft.Container(
                 content=ft.Column(
                     [
@@ -245,33 +274,25 @@ def main(page: ft.Page):
                     ],
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
-                width=600,
-                height=650,
+                width=600, height=650,
             ),
             actions=[
-                ft.TextButton("📥 Скачать", on_click=download_action),
-                ft.TextButton("Закрыть", on_click=close_dialog),
+                ft.TextButton("📥 Скачать", on_click=lambda e: download_file(image_path, file_name)),
+                ft.TextButton("Закрыть", on_click=close),
             ],
         )
-        page.open(image_dialog)
+        page.open(dlg)
 
-    # Открытие видео в диалоговом окне с плеером
-    def open_video_viewer(video_path, file_name):
-        def close_dialog(e):
-            page.close(video_dialog)
+    def open_video_viewer(video_path: str, file_name: str):
+        def close(e): page.close(dlg)
 
-        def download_action(e):
-            download_file(video_path, file_name)
-
-        video_dialog = ft.AlertDialog(
+        dlg = ft.AlertDialog(
             content=ft.Container(
                 content=ft.Column(
                     [
                         ft.Video(
                             playlist=[ft.VideoMedia(video_path)],
-                            width=600,
-                            height=400,
-                            show_controls=True,
+                            width=600, height=400, show_controls=True,
                         ),
                         ft.Text(file_name, size=14, weight=ft.FontWeight.BOLD),
                     ],
@@ -280,236 +301,125 @@ def main(page: ft.Page):
                 width=600,
             ),
             actions=[
-                ft.TextButton("📥 Скачать", on_click=download_action),
-                ft.TextButton("Закрыть", on_click=close_dialog),
+                ft.TextButton("📥 Скачать", on_click=lambda e: download_file(video_path, file_name)),
+                ft.TextButton("Закрыть", on_click=close),
             ],
         )
-        page.open(video_dialog)
+        page.open(dlg)
 
-    # Диалог переименования и настройки одноразового просмотра перед отправкой файла
-    def show_rename_dialog(file_info):
-        file_path, original_name = file_info['path'], file_info['name']
-        file_ext = os.path.splitext(original_name)[1]
-        file_name_without_ext = os.path.splitext(original_name)[0]
+    # ── Контекстное меню сообщения ─────────────────────────────────────────────
 
-        is_media = file_ext.lower() in ['.jpg', '.jpeg', '.png', '.gif', '.webp',
-                                        '.mp4', '.avi', '.mov', '.mkv', '.webm',
-                                        '.mp3', '.wav', '.ogg', '.m4a']
+    def show_message_menu(msg_widget, text: str, is_user: bool):
+        def close(e):   page.close(dlg)
+        def copy(e):
+            page.set_clipboard(text)
+            show_snack("📋 Скопировано!")
+            page.close(dlg)
+        def delete(e):
+            delete_message(msg_widget, text)
+            page.close(dlg)
 
-        rename_field = ft.TextField(value=file_name_without_ext, label="Название", expand=True, text_size=13)
-        one_time_checkbox = ft.Checkbox(label="Одноразовый", value=False)
+        items = [ft.TextButton("📋 Копировать", on_click=copy)]
+        if is_user:
+            items.append(ft.TextButton("🗑️ Удалить", on_click=delete))
 
-        def confirm_rename(e):
-            new_name = rename_field.value.strip() + file_ext
-            if new_name:
-                file_info['display_name'] = new_name
-            file_info['one_time_view'] = one_time_checkbox.value if is_media else False
-            page.close(rename_dialog)
-            add_file_to_chat(file_info)
-
-        def skip_rename(e):
-            file_info['display_name'] = original_name
-            file_info['one_time_view'] = one_time_checkbox.value if is_media else False
-            page.close(rename_dialog)
-            add_file_to_chat(file_info)
-
-        content_items = [
-            ft.Text(original_name[:35] + "..." if len(original_name) > 35 else original_name,
-                    size=11, weight=ft.FontWeight.BOLD),
-            rename_field,
-        ]
-        if is_media:
-            content_items.append(one_time_checkbox)
-
-        rename_dialog = ft.AlertDialog(
-            title=ft.Text("Отправка файла", size=15),
-            content=ft.Container(
-                content=ft.Column(content_items, tight=True, spacing=10),
-                width=280,
-            ),
-            actions=[
-                ft.TextButton("Отмена", on_click=lambda e: page.close(rename_dialog)),
-                ft.TextButton("Отправить", on_click=confirm_rename),
-            ],
+        dlg = ft.AlertDialog(
+            title=ft.Text("Действия"),
+            content=ft.Column(items, tight=True),
+            actions=[ft.TextButton("Закрыть", on_click=close)],
         )
-        page.open(rename_dialog)
+        page.open(dlg)
 
-    # Обработка выбора файлов через FilePicker
-    def on_file_picked(e: ft.FilePickerResultEvent):
-        if e.files:
-            for file in e.files:
-                file_info = {
-                    'path': file.path,
-                    'name': file.name,
-                    'display_name': file.name
-                }
-                show_rename_dialog(file_info)
-
-    file_picker = ft.FilePicker(on_result=on_file_picked)
-    page.overlay.append(file_picker)
-
-    # Добавление файла в чат и отправка через WebSocket
-    def add_file_to_chat(file_info):
-        file_path = file_info['path']
-        display_name = file_info['display_name']
-        one_time_view = file_info.get('one_time_view', False)
-        file_ext = os.path.splitext(display_name)[1].lower()
-
-        saved_path = auto_save_file(file_path, display_name)
-
-        file_type = "document"
-        if file_ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']:
-            file_type = "image"
-        elif file_ext in ['.mp4', '.avi', '.mov', '.mkv', '.webm']:
-            file_type = "video"
-        elif file_ext in ['.mp3', '.wav', '.ogg', '.m4a']:
-            file_type = "audio"
-
-        send_file_via_websocket(saved_path, display_name, file_type, one_time_view)
-
-        msg = None
-        if file_ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']:
-            msg = create_image_message(saved_path, display_name, is_user=True, one_time_view=one_time_view)
-        elif file_ext in ['.mp4', '.avi', '.mov', '.mkv', '.webm']:
-            msg = create_video_message(saved_path, display_name, is_user=True)
-        elif file_ext in ['.mp3', '.wav', '.ogg', '.m4a']:
-            msg = create_audio_message(saved_path, display_name, is_user=True, one_time_view=one_time_view)
-        else:
-            msg = create_document_message(saved_path, f"📎 {display_name}", "Файл", is_user=True)
-
-        if msg:
-            messages_column.controls.append(msg)
-            all_messages.append(msg)
-            sent_media_files.append({'name': display_name, 'type': file_ext, 'path': saved_path})
-
-        messages_column.scroll_to(offset=-1, duration=300)
-        page.update()
-
-    # Переключение видимости кнопок ввода при изменении текста
-    def on_input_change(e):
-        if message_input.value.strip():
-            mic_button.visible = False
-            attach_button.visible = False
-            send_button.visible = True
-        else:
-            mic_button.visible = True
-            attach_button.visible = True
-            send_button.visible = False
-        mic_button.update()
-        attach_button.update()
-        send_button.update()
-
-    # Удаление сообщения из чата и отправка команды удаления собеседнику
-    def delete_message(message_widget, message_text=""):
+    def delete_message(widget, text: str = ""):
+        if widget not in messages_column.controls:
+            return
         try:
-            if message_widget in messages_column.controls:
-                message_id = f"msg_{datetime.datetime.now().timestamp()}_{hash(message_text)}"
-                send_delete_command(message_id, message_text)
-                messages_column.controls.remove(message_widget)
-                if message_widget in all_messages:
-                    all_messages.remove(message_widget)
-                messages_column.update()
-                page.open(ft.SnackBar(content=ft.Text("✅ Сообщение удалено у всех"), duration=2000))
-                page.update()
+            msg_id = f"msg_{datetime.datetime.now().timestamp()}_{hash(text)}"
+            send_delete_command(msg_id, text)
+            messages_column.controls.remove(widget)
+            if widget in all_messages:
+                all_messages.remove(widget)
+            messages_column.update()
+            show_snack("✅ Сообщение удалено у всех")
         except Exception as e:
             print(f"❌ Ошибка удаления: {e}")
 
-    # Контекстное меню сообщения с действиями копировать и удалить
-    def show_message_menu(e, message_widget, message_text, is_user):
-        def close_menu(e):
-            page.close(menu_dialog)
+    # ── Создание пузырей сообщений ─────────────────────────────────────────────
 
-        def delete_action(e):
-            delete_message(message_widget, message_text)
-            page.close(menu_dialog)
-
-        def copy_action(e):
-            page.set_clipboard(message_text)
-            page.open(ft.SnackBar(content=ft.Text("📋 Скопировано!"), duration=2000))
-            page.update()
-            page.close(menu_dialog)
-
-        menu_items = [ft.TextButton("📋 Копировать", on_click=copy_action)]
+    def make_message_row(bubble, is_user: bool, user_data: dict) -> ft.Row:
+        """Оборачивает пузырь с аватаром — справа для себя, слева для собеседника."""
+        avatar = make_avatar(user_data)
+        spacer = ft.Container(expand=True)
         if is_user:
-            menu_items.append(ft.TextButton("🗑️ Удалить", on_click=delete_action))
+            return ft.Row([spacer, bubble, avatar], vertical_alignment=ft.CrossAxisAlignment.START)
+        else:
+            return ft.Row([avatar, bubble, spacer], vertical_alignment=ft.CrossAxisAlignment.START)
 
-        menu_dialog = ft.AlertDialog(
-            title=ft.Text("Действия"),
-            content=ft.Column(menu_items, tight=True),
-            actions=[ft.TextButton("Закрыть", on_click=close_menu)],
-        )
-        page.open(menu_dialog)
+    def make_bubble_colors(is_user: bool):
+        return ft.Colors.BLUE if is_user else ft.Colors.GREY
 
-    message_input = ft.TextField(
-        hint_text="Введите сообщение...",
-        expand=True,
-        multiline=True,
-        min_lines=1,
-        max_lines=3,
-        on_change=on_input_change,
-    )
+    def make_bubble_colors_dark(is_user: bool):
+        return ft.Colors.BLUE_700 if is_user else ft.Colors.GREY_700
 
-    # Создание пузыря текстового сообщения с аватаром
-    def create_chat_message(message: str, is_user: bool = True):
+    def make_bubble_margin(is_user: bool):
+        return ft.margin.only(right=10) if is_user else ft.margin.only(left=10)
+
+    def create_text_message(text: str, is_user: bool = True) -> ft.GestureDetector:
         user_data = CURRENT_USER if is_user else CONTACT_USER
-        avatar = create_avatar_widget(user_data)
-
-        message_bubble = ft.Container(
+        bubble = ft.Container(
             content=ft.Column(
                 [
-                    ft.Text(message, color=ft.Colors.WHITE),
-                    ft.Text(datetime.datetime.now().strftime("%H:%M"), size=12, color=ft.Colors.WHITE54),
+                    ft.Text(text, color=ft.Colors.WHITE),
+                    ft.Text(now_hm(), size=12, color=ft.Colors.WHITE54),
                 ],
-                tight=True,
-                spacing=2,
+                tight=True, spacing=2,
             ),
-            bgcolor=ft.Colors.BLUE if is_user else ft.Colors.GREY,
+            bgcolor=make_bubble_colors(is_user),
             padding=10,
             border_radius=15,
-            margin=ft.margin.only(right=10) if is_user else ft.margin.only(left=10),
+            margin=make_bubble_margin(is_user),
         )
-
-        if is_user:
-            message_row = ft.Row(
-                [ft.Container(expand=True), message_bubble, avatar],
-                vertical_alignment=ft.CrossAxisAlignment.START,
-            )
-        else:
-            message_row = ft.Row(
-                [avatar, message_bubble, ft.Container(expand=True)],
-                vertical_alignment=ft.CrossAxisAlignment.START,
-            )
-
-        clickable_message = ft.GestureDetector(
-            content=message_row,
-            on_long_press_start=lambda e: show_message_menu(e, clickable_message, message, is_user),
-            on_tap=lambda e: show_message_menu(e, clickable_message, message, is_user),
+        row = make_message_row(bubble, is_user, user_data)
+        widget = ft.GestureDetector(
+            content=row,
+            on_tap=lambda e: show_message_menu(widget, text, is_user),
+            on_long_press_start=lambda e: show_message_menu(widget, text, is_user),
         )
-        return clickable_message
+        return widget
 
-    # Создание пузыря сообщения с изображением, поддержка одноразового просмотра
-    def create_image_message(image_path: str, file_name: str, is_user: bool = True, one_time_view: bool = False):
-        user_data = CURRENT_USER if is_user else CONTACT_USER
-        avatar = create_avatar_widget(user_data)
-
+    def create_image_message(
+        image_path: str, file_name: str,
+        is_user: bool = True, one_time_view: bool = False
+    ) -> ft.GestureDetector:
+        user_data  = CURRENT_USER if is_user else CONTACT_USER
         message_id = f"img_{datetime.datetime.now().timestamp()}"
-        is_viewed = [message_id in viewed_one_time_messages]
+        is_viewed  = [message_id in viewed_once_ids]
 
-        def open_one_time_image(e):
+        def build_viewed_placeholder():
+            return ft.Column(
+                [
+                    ft.Icon(ft.Icons.VISIBILITY_OFF, size=80, color=ft.Colors.WHITE54),
+                    ft.Text("Просмотрено", size=16, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD),
+                    ft.Text(now_hm(), size=12, color=ft.Colors.WHITE54),
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=10,
+            )
+
+        def on_tap(e):
             if one_time_view:
                 if is_viewed[0]:
-                    page.open(ft.SnackBar(content=ft.Text("❌ Это сообщение уже было просмотрено"), duration=2000))
-                    page.update()
+                    show_snack("❌ Сообщение уже было просмотрено")
                     return
-
-                viewed_one_time_messages.append(message_id)
+                viewed_once_ids.append(message_id)
                 is_viewed[0] = True
 
-                def close_and_delete(e):
-                    page.close(image_dialog)
-                    replace_with_viewed_placeholder()
+                def close_and_replace(e):
+                    page.close(dlg)
+                    image_container.content = build_viewed_placeholder()
+                    image_container.update()
 
-                image_dialog = ft.AlertDialog(
+                dlg = ft.AlertDialog(
                     content=ft.Container(
                         content=ft.Column(
                             [
@@ -519,58 +429,37 @@ def main(page: ft.Page):
                             ],
                             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                         ),
-                        width=600,
-                        height=650,
+                        width=600, height=650,
                     ),
-                    actions=[ft.TextButton("Закрыть", on_click=close_and_delete)],
+                    actions=[ft.TextButton("Закрыть", on_click=close_and_replace)],
                 )
-                page.open(image_dialog)
+                page.open(dlg)
             else:
                 open_image_fullscreen(image_path, file_name)
 
-        def replace_with_viewed_placeholder():
-            image_container.content = ft.Column(
-                [
-                    ft.Icon(ft.Icons.VISIBILITY_OFF, size=80, color=ft.Colors.WHITE54),
-                    ft.Text("Просмотрено", size=16, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD),
-                    ft.Text(datetime.datetime.now().strftime("%H:%M"), size=12, color=ft.Colors.WHITE54),
-                ],
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=10,
-            )
-            image_container.update()
-
+        # Контент пузыря — либо «просмотрено», либо картинка
         if one_time_view and is_viewed[0]:
-            image_content = ft.Column(
-                [
-                    ft.Icon(ft.Icons.VISIBILITY_OFF, size=80, color=ft.Colors.WHITE54),
-                    ft.Text("Просмотрено", size=16, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD),
-                    ft.Text(datetime.datetime.now().strftime("%H:%M"), size=12, color=ft.Colors.WHITE54),
-                ],
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=10,
-            )
+            bubble_content = build_viewed_placeholder()
         else:
-            image_content = ft.Column(
+            eye_overlay = ft.Container(
+                content=ft.Icon(ft.Icons.VISIBILITY, color=ft.Colors.WHITE, size=30),
+                alignment=ft.alignment.center,
+                width=200, height=200,
+            ) if one_time_view else ft.Container()
+
+            bubble_content = ft.Column(
                 [
-                    ft.Stack(
-                        [
-                            ft.Image(src=image_path, width=200, height=200,
-                                     fit=ft.ImageFit.COVER, border_radius=10),
-                            ft.Container(
-                                content=ft.Icon(ft.Icons.VISIBILITY, color=ft.Colors.WHITE, size=30),
-                                alignment=ft.alignment.center,
-                                width=200,
-                                height=200,
-                            ) if one_time_view else ft.Container(),
-                        ],
-                    ),
+                    ft.Stack([
+                        ft.Image(src=image_path, width=200, height=200,
+                                 fit=ft.ImageFit.COVER, border_radius=10),
+                        eye_overlay,
+                    ]),
                     ft.Row(
                         [
-                            ft.Icon(ft.Icons.TIMER_OUTLINED, color=ft.Colors.WHITE,
-                                    size=16) if one_time_view else ft.Container(),
+                            ft.Icon(ft.Icons.TIMER_OUTLINED, color=ft.Colors.WHITE, size=16)
+                            if one_time_view else ft.Container(),
                             ft.Text(
-                                file_name if not one_time_view else "Одноразовое фото",
+                                "Одноразовое фото" if one_time_view else file_name,
                                 size=12, color=ft.Colors.WHITE,
                                 max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, expand=True,
                             ),
@@ -582,60 +471,42 @@ def main(page: ft.Page):
                         ],
                         spacing=5,
                     ),
-                    ft.Text(datetime.datetime.now().strftime("%H:%M"), size=12, color=ft.Colors.WHITE54),
+                    ft.Text(now_hm(), size=12, color=ft.Colors.WHITE54),
                 ],
-                tight=True,
-                spacing=5,
+                tight=True, spacing=5,
             )
 
         image_container = ft.Container(
-            content=image_content,
-            bgcolor=ft.Colors.BLUE_700 if is_user else ft.Colors.GREY_700,
+            content=bubble_content,
+            bgcolor=make_bubble_colors_dark(is_user),
             padding=10,
             border_radius=15,
-            margin=ft.margin.only(right=10) if is_user else ft.margin.only(left=10),
+            margin=make_bubble_margin(is_user),
         )
-
-        if is_user:
-            message_row = ft.Row(
-                [ft.Container(expand=True), image_container, avatar],
-                vertical_alignment=ft.CrossAxisAlignment.START,
-            )
-        else:
-            message_row = ft.Row(
-                [avatar, image_container, ft.Container(expand=True)],
-                vertical_alignment=ft.CrossAxisAlignment.START,
-            )
-
-        clickable_message = ft.GestureDetector(
-            content=message_row,
-            on_tap=lambda e: open_one_time_image(e),
-            on_long_press_start=lambda e: show_message_menu(e, clickable_message, f"📷 Фото", is_user),
+        row    = make_message_row(image_container, is_user, user_data)
+        widget = ft.GestureDetector(
+            content=row,
+            on_tap=on_tap,
+            on_long_press_start=lambda e: show_message_menu(widget, "📷 Фото", is_user),
         )
-        return clickable_message
+        return widget
 
-    # Создание пузыря сообщения с видео и превью
-    def create_video_message(video_path: str, file_name: str, is_user: bool = True):
+    def create_video_message(video_path: str, file_name: str, is_user: bool = True) -> ft.GestureDetector:
         user_data = CURRENT_USER if is_user else CONTACT_USER
-        avatar = create_avatar_widget(user_data)
-
-        video_preview = ft.Container(
+        bubble = ft.Container(
             content=ft.Column(
                 [
-                    ft.Stack(
-                        [
-                            ft.Container(width=200, height=150, bgcolor=ft.Colors.BLACK54, border_radius=10),
-                            ft.Container(
-                                content=ft.Icon(ft.Icons.PLAY_CIRCLE_FILLED, color=ft.Colors.WHITE, size=60),
-                                alignment=ft.alignment.center,
-                                width=200,
-                                height=150,
-                            ),
-                        ],
-                    ),
+                    ft.Stack([
+                        ft.Container(width=200, height=150, bgcolor=ft.Colors.BLACK54, border_radius=10),
+                        ft.Container(
+                            content=ft.Icon(ft.Icons.PLAY_CIRCLE_FILLED, color=ft.Colors.WHITE, size=60),
+                            alignment=ft.alignment.center,
+                            width=200, height=150,
+                        ),
+                    ]),
                     ft.Row(
                         [
-                            ft.Text("Vidio", size=12, color=ft.Colors.WHITE,
+                            ft.Text("Видео", size=12, color=ft.Colors.WHITE,
                                     max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, expand=True),
                             ft.IconButton(
                                 icon=ft.Icons.DOWNLOAD, icon_color=ft.Colors.WHITE,
@@ -645,241 +516,182 @@ def main(page: ft.Page):
                         ],
                         spacing=5,
                     ),
-                    ft.Text(datetime.datetime.now().strftime("%H:%M"), size=12, color=ft.Colors.WHITE54),
+                    ft.Text(now_hm(), size=12, color=ft.Colors.WHITE54),
                 ],
-                tight=True,
-                spacing=5,
+                tight=True, spacing=5,
             ),
-            bgcolor=ft.Colors.BLUE_700 if is_user else ft.Colors.GREY_700,
+            bgcolor=make_bubble_colors_dark(is_user),
             padding=10,
             border_radius=15,
-            margin=ft.margin.only(right=10) if is_user else ft.margin.only(left=10),
+            margin=make_bubble_margin(is_user),
         )
-
-        if is_user:
-            message_row = ft.Row(
-                [ft.Container(expand=True), video_preview, avatar],
-                vertical_alignment=ft.CrossAxisAlignment.START,
-            )
-        else:
-            message_row = ft.Row(
-                [avatar, video_preview, ft.Container(expand=True)],
-                vertical_alignment=ft.CrossAxisAlignment.START,
-            )
-
-        clickable_message = ft.GestureDetector(
-            content=message_row,
+        row    = make_message_row(bubble, is_user, user_data)
+        widget = ft.GestureDetector(
+            content=row,
             on_tap=lambda e: open_video_viewer(video_path, file_name),
-            on_long_press_start=lambda e: show_message_menu(e, clickable_message, f"Видео", is_user),
+            on_long_press_start=lambda e: show_message_menu(widget, "Видео", is_user),
         )
-        return clickable_message
+        return widget
 
-    # Создание пузыря аудио сообщения с плеером, слайдером и таймером
-    def create_audio_message(audio_path: str, file_name: str, is_user: bool = True, one_time_view: bool = False):
+    def create_audio_message(
+        audio_path: str, file_name: str,
+        is_user: bool = True, one_time_view: bool = False
+    ) -> ft.GestureDetector | ft.Container:
         user_data = CURRENT_USER if is_user else CONTACT_USER
-        avatar = create_avatar_widget(user_data)
+        abs_path  = os.path.abspath(audio_path)
 
-        absolute_path = os.path.abspath(audio_path)
+        if not os.path.exists(abs_path):
+            print(f"❌ Аудио не найдено: {abs_path}")
+            return create_document_message(abs_path, f"❌ {file_name}", "Файл не найден", is_user)
 
-        if not os.path.exists(absolute_path):
-            print(f"❌ Аудио файл не найден: {absolute_path}")
-            return create_document_message(absolute_path, f"❌ {file_name}", "Файл не найден", is_user)
+        size_text = format_file_size(abs_path)
 
+        # Оценка длительности по размеру файла
         try:
-            file_size = os.path.getsize(absolute_path)
-            size_text = f"{file_size / 1024:.1f} КБ" if file_size < 1024 * 1024 else f"{file_size / (1024 * 1024):.1f} МБ"
-        except:
-            size_text = "?"
-            file_size = 0
+            file_size = os.path.getsize(abs_path)
+            duration  = [max(30, min(600, int(file_size / (1024 * 1024) * 60)))]
+        except Exception:
+            duration = [180]
 
-        is_playing = [False]
-        current_position = [0]
-        duration = [180]
-        timer_thread = [None]
-        audio_element = [None]
+        is_playing       = [False]
+        current_position = [0.0]
+        timer_ref        = [None]
+        audio_elem       = [None]
+        play_btn         = [None]
+        slider_ref       = [None]
+        time_text        = [None]
 
-        try:
-            estimated_duration = file_size / (1024 * 1024) * 60
-            duration[0] = max(30, min(600, int(estimated_duration)))
-        except:
-            duration[0] = 180
-
-        play_button = [None]
-        progress_slider = [None]
-        time_text = [None]
-
-        # Форматирование секунд в строку MM:SS
-        def format_time(seconds):
-            minutes = int(seconds // 60)
-            secs = int(seconds % 60)
-            return f"{minutes}:{secs:02d}"
-
-        audio = ft.Audio(src=absolute_path, autoplay=False, volume=1)
-        audio_element[0] = audio
+        audio = ft.Audio(src=abs_path, autoplay=False, volume=1)
+        audio_elem[0] = audio
         page.overlay.append(audio)
 
-        # Обновление позиции слайдера при перетаскивании
         def on_slider_change(e):
-            if duration[0] > 0:
-                current_position[0] = e.control.value
-                time_text[0].value = f"{format_time(current_position[0])} / {format_time(duration[0])}"
-                time_text[0].update()
+            current_position[0] = e.control.value
+            time_text[0].value = f"{format_time_seconds(current_position[0])} / {format_time_seconds(duration[0])}"
+            time_text[0].update()
 
-        # Применение перемотки после отпускания слайдера
-        def on_slider_change_end(e):
-            if duration[0] > 0 and audio_element[0]:
-                current_position[0] = e.control.value
-                try:
-                    audio_element[0].seek(int(current_position[0] * 1000))
-                    time_text[0].value = f"{format_time(current_position[0])} / {format_time(duration[0])}"
-                    time_text[0].update()
-                except Exception as ex:
-                    print(f"❌ Ошибка перемотки: {ex}")
+        def on_slider_release(e):
+            current_position[0] = e.control.value
+            try:
+                audio_elem[0].seek(int(current_position[0] * 1000))
+            except Exception as ex:
+                print(f"❌ Ошибка перемотки: {ex}")
+            on_slider_change(e)
 
-        # Периодическое обновление прогресс-бара во время воспроизведения
-        def update_progress():
-            if is_playing[0] and current_position[0] < duration[0]:
-                current_position[0] += 0.5
-                if current_position[0] >= duration[0]:
-                    current_position[0] = duration[0]
-                    is_playing[0] = False
-                    play_button[0].icon = ft.Icons.PLAY_ARROW
-                    play_button[0].tooltip = "Воспроизвести"
-                    play_button[0].update()
+        def tick():
+            """Обновляет прогресс каждые 0.5 секунды."""
+            if not is_playing[0]:
+                return
+            current_position[0] = min(current_position[0] + 0.5, duration[0])
+            slider_ref[0].value = current_position[0]
+            time_text[0].value  = f"{format_time_seconds(current_position[0])} / {format_time_seconds(duration[0])}"
+            slider_ref[0].update()
+            time_text[0].update()
 
-                progress_slider[0].value = current_position[0]
-                time_text[0].value = f"{format_time(current_position[0])} / {format_time(duration[0])}"
-                progress_slider[0].update()
-                time_text[0].update()
+            if current_position[0] >= duration[0]:
+                is_playing[0] = False
+                play_btn[0].icon    = ft.Icons.PLAY_ARROW
+                play_btn[0].tooltip = "Воспроизвести"
+                play_btn[0].update()
+                return
 
-                if is_playing[0]:
-                    timer_thread[0] = threading.Timer(0.5, update_progress)
-                    timer_thread[0].start()
+            timer_ref[0] = threading.Timer(0.5, tick)
+            timer_ref[0].start()
 
-        # Переключение воспроизведения и паузы аудио
         def toggle_play(e):
             try:
                 if is_playing[0]:
                     is_playing[0] = False
-                    play_button[0].icon = ft.Icons.PLAY_ARROW
-                    play_button[0].tooltip = "Воспроизвести"
-                    if timer_thread[0]:
-                        timer_thread[0].cancel()
-                    if audio_element[0]:
-                        audio_element[0].pause()
+                    play_btn[0].icon    = ft.Icons.PLAY_ARROW
+                    play_btn[0].tooltip = "Воспроизвести"
+                    if timer_ref[0]:
+                        timer_ref[0].cancel()
+                    audio_elem[0].pause()
                 else:
                     is_playing[0] = True
-                    play_button[0].icon = ft.Icons.PAUSE
-                    play_button[0].tooltip = "Пауза"
-                    if audio_element[0]:
-                        if current_position[0] == 0:
-                            audio_element[0].play()
-                        else:
-                            audio_element[0].resume()
-                    update_progress()
-                play_button[0].update()
+                    play_btn[0].icon    = ft.Icons.PAUSE
+                    play_btn[0].tooltip = "Пауза"
+                    if current_position[0] == 0:
+                        audio_elem[0].play()
+                    else:
+                        audio_elem[0].resume()
+                    tick()
+                play_btn[0].update()
             except Exception as ex:
                 print(f"❌ Ошибка воспроизведения: {ex}")
 
-        play_btn = ft.IconButton(
-            icon=ft.Icons.PLAY_ARROW, icon_color=ft.Colors.WHITE,
-            icon_size=30, tooltip="Воспроизвести", on_click=toggle_play,
-        )
-        play_button[0] = play_btn
+        btn = ft.IconButton(icon=ft.Icons.PLAY_ARROW, icon_color=ft.Colors.WHITE,
+                            icon_size=30, tooltip="Воспроизвести", on_click=toggle_play)
+        play_btn[0] = btn
 
-        slider = ft.Slider(
-            min=0, max=duration[0], value=0, divisions=100,
-            active_color=ft.Colors.WHITE, inactive_color=ft.Colors.WHITE38,
-            thumb_color=ft.Colors.WHITE,
-            on_change=on_slider_change, on_change_end=on_slider_change_end,
-        )
-        progress_slider[0] = slider
+        sld = ft.Slider(min=0, max=duration[0], value=0, divisions=100,
+                        active_color=ft.Colors.WHITE, inactive_color=ft.Colors.WHITE38,
+                        thumb_color=ft.Colors.WHITE,
+                        on_change=on_slider_change, on_change_end=on_slider_release)
+        slider_ref[0] = sld
 
-        time_display = ft.Text(
-            f"0:00 / {format_time(duration[0])}",
-            color=ft.Colors.WHITE70, size=11, weight=ft.FontWeight.BOLD,
-        )
-        time_text[0] = time_display
+        tm = ft.Text(f"0:00 / {format_time_seconds(duration[0])}",
+                     color=ft.Colors.WHITE70, size=11, weight=ft.FontWeight.BOLD)
+        time_text[0] = tm
 
-        audio_bubble = ft.Container(
+        download_btn = ft.IconButton(
+            icon=ft.Icons.DOWNLOAD, icon_color=ft.Colors.WHITE,
+            icon_size=20, tooltip="Скачать",
+            on_click=lambda e: download_file(abs_path, file_name),
+        ) if not one_time_view else ft.Container()
+
+        bubble = ft.Container(
             content=ft.Column(
                 [
                     ft.Row(
                         [
-                            play_btn,
+                            btn,
                             ft.Column(
                                 [
                                     ft.Text(
-                                        file_name if not one_time_view else "🔊 Голосовое сообщение",
+                                        "🔊 Голосовое сообщение" if one_time_view else file_name,
                                         color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD, size=13,
                                         max_lines=1, overflow=ft.TextOverflow.ELLIPSIS,
                                     ),
                                     ft.Text(f"🎵 {size_text}", color=ft.Colors.WHITE70, size=11),
                                 ],
-                                spacing=2,
-                                expand=True,
+                                spacing=2, expand=True,
                             ),
-                            ft.IconButton(
-                                icon=ft.Icons.DOWNLOAD, icon_color=ft.Colors.WHITE,
-                                icon_size=20, tooltip="Скачать",
-                                on_click=lambda e: download_file(absolute_path, file_name),
-                            ) if not one_time_view else ft.Container(),
+                            download_btn,
                         ],
                         spacing=5,
                     ),
-                    slider,
-                    ft.Row(
-                        [
-                            time_display,
-                            ft.Container(expand=True),
-                            ft.Text(datetime.datetime.now().strftime("%H:%M"), size=12, color=ft.Colors.WHITE54),
-                        ],
-                    ),
+                    sld,
+                    ft.Row([
+                        tm,
+                        ft.Container(expand=True),
+                        ft.Text(now_hm(), size=12, color=ft.Colors.WHITE54),
+                    ]),
                 ],
-                tight=True,
-                spacing=2,
+                tight=True, spacing=2,
             ),
-            bgcolor=ft.Colors.BLUE_700 if is_user else ft.Colors.GREY_700,
-            padding=10,
-            border_radius=15,
-            margin=ft.margin.only(right=10) if is_user else ft.margin.only(left=10),
+            bgcolor=make_bubble_colors_dark(is_user),
+            padding=10, border_radius=15,
+            margin=make_bubble_margin(is_user),
             width=350,
         )
-
-        if is_user:
-            message_row = ft.Row(
-                [ft.Container(expand=True), audio_bubble, avatar],
-                vertical_alignment=ft.CrossAxisAlignment.START,
-            )
-        else:
-            message_row = ft.Row(
-                [avatar, audio_bubble, ft.Container(expand=True)],
-                vertical_alignment=ft.CrossAxisAlignment.START,
-            )
-
-        clickable_message = ft.GestureDetector(
-            content=message_row,
-            on_long_press_start=lambda e: show_message_menu(e, clickable_message, f"🎵 Аудио: {file_name}", is_user),
+        row    = make_message_row(bubble, is_user, user_data)
+        widget = ft.GestureDetector(
+            content=row,
+            on_long_press_start=lambda e: show_message_menu(widget, f"🎵 Аудио: {file_name}", is_user),
         )
-        return clickable_message
+        return widget
 
-    # Создание пузыря сообщения с документом и кнопкой скачивания
-    def create_document_message(file_path: str, file_name: str, file_type: str, is_user: bool = True):
+    def create_document_message(
+        file_path: str, file_name: str, file_type: str, is_user: bool = True
+    ) -> ft.GestureDetector:
         user_data = CURRENT_USER if is_user else CONTACT_USER
-        avatar = create_avatar_widget(user_data)
+        size_text = format_file_size(file_path)
+        clean_name = file_name
+        for prefix in ("📄 ", "📝 ", "📊 ", "📃 ", "🗜️ ", "📎 "):
+            clean_name = clean_name.replace(prefix, "")
 
-        try:
-            file_size = os.path.getsize(file_path)
-            if file_size < 1024:
-                size_text = f"{file_size} Б"
-            elif file_size < 1024 * 1024:
-                size_text = f"{file_size / 1024:.1f} КБ"
-            else:
-                size_text = f"{file_size / (1024 * 1024):.1f} МБ"
-        except:
-            size_text = "Неизвестно"
-
-        document_bubble = ft.Container(
+        bubble = ft.Container(
             content=ft.Column(
                 [
                     ft.Row(
@@ -891,280 +703,326 @@ def main(page: ft.Page):
                                             size=13, max_lines=2, overflow=ft.TextOverflow.ELLIPSIS),
                                     ft.Text(f"{file_type} • {size_text}", color=ft.Colors.WHITE70, size=11),
                                 ],
-                                spacing=2,
-                                expand=True,
+                                spacing=2, expand=True,
                             ),
                             ft.IconButton(
                                 icon=ft.Icons.DOWNLOAD, icon_color=ft.Colors.WHITE,
                                 icon_size=20, tooltip="Скачать",
-                                on_click=lambda e: download_file(
-                                    file_path,
-                                    file_name.replace("📄 ", "").replace("📝 ", "").replace("📊 ", "")
-                                            .replace("📃 ", "").replace("🗜️ ", "").replace("📎 ", "")
-                                ),
+                                on_click=lambda e: download_file(file_path, clean_name),
                             ),
                         ],
                         spacing=10,
                     ),
-                    ft.Text(datetime.datetime.now().strftime("%H:%M"), size=12, color=ft.Colors.WHITE54),
+                    ft.Text(now_hm(), size=12, color=ft.Colors.WHITE54),
                 ],
-                tight=True,
-                spacing=5,
+                tight=True, spacing=5,
             ),
-            bgcolor=ft.Colors.BLUE_700 if is_user else ft.Colors.GREY_700,
-            padding=10,
-            border_radius=15,
-            margin=ft.margin.only(right=10) if is_user else ft.margin.only(left=10),
+            bgcolor=make_bubble_colors_dark(is_user),
+            padding=10, border_radius=15,
+            margin=make_bubble_margin(is_user),
             width=280,
         )
-
-        if is_user:
-            message_row = ft.Row(
-                [ft.Container(expand=True), document_bubble, avatar],
-                vertical_alignment=ft.CrossAxisAlignment.START,
-            )
-        else:
-            message_row = ft.Row(
-                [avatar, document_bubble, ft.Container(expand=True)],
-                vertical_alignment=ft.CrossAxisAlignment.START,
-            )
-
-        clickable_message = ft.GestureDetector(
-            content=message_row,
-            on_long_press_start=lambda e: show_message_menu(e, clickable_message, file_name, is_user),
+        row    = make_message_row(bubble, is_user, user_data)
+        widget = ft.GestureDetector(
+            content=row,
+            on_long_press_start=lambda e: show_message_menu(widget, file_name, is_user),
         )
-        return clickable_message
+        return widget
 
-    # Отправка голосового сообщения в чат
-    def send_voice_message(audio_path, file_name, one_time=False):
-        saved_path = auto_save_file(audio_path, file_name)
-        msg = create_audio_message(saved_path, "Голосовое сообщение", is_user=True, one_time_view=one_time)
-        messages_column.controls.append(msg)
-        all_messages.append(msg)
-        messages_column.scroll_to(offset=-1, duration=300)
-        page.update()
+    # ── Отправка ───────────────────────────────────────────────────────────────
 
-        if auto_download_folder and saved_path != audio_path:
-            page.open(ft.SnackBar(content=ft.Text("✅ Голосовое сообщение сохранено"), duration=2000))
-            page.update()
+    def send_text_message(e):
+        text = message_input.value.strip()
+        if not text:
+            return
 
-    # Переключение видимости панели записи голоса
-    def toggle_voice_recorder(e):
-        voice_recorder.visible = not voice_recorder.visible
-        if voice_recorder.visible:
-            start_recording()
-        voice_recorder.update()
+        add_message_to_chat(create_text_message(text, is_user=True))
 
-    recording_start_time = [None]
-    recording_timer = [None]
+        try:
+            ws.send(json.dumps({"message": text, "sender_id": CURRENT_USER["id"]}))
+        except Exception as ex:
+            show_snack(f"❌ Ошибка отправки: {ex}")
 
-    # Запуск таймера записи голосового сообщения
-    def start_recording():
-        recording_start_time[0] = time.time()
-        update_recording_timer()
+        message_input.value = ""
+        message_input.update()
+        reset_input_buttons()
 
-    # Обновление отображения времени записи каждую секунду
-    def update_recording_timer():
-        if recording_start_time[0] and voice_recorder.visible:
-            elapsed = int(time.time() - recording_start_time[0])
-            minutes = elapsed // 60
-            seconds = elapsed % 60
-            recording_time_text.value = f"Запись... {minutes}:{seconds:02d}"
-            recording_time_text.update()
-            threading.Timer(1.0, update_recording_timer).start()
-
-    # Открытие диалога выбора файлов для отправки
-    def open_file_picker(e):
-        file_picker.pick_files(allow_multiple=True, dialog_title="Выберите файлы для отправки")
-
-    # Отправка текстового сообщения через WebSocket
-    def send_message(e):
-        if message_input.value.strip():
-            msg_data = {
-                "message": message_input.value,
-                "sender_id": CURRENT_USER["id"]
-            }
-
-            msg = create_chat_message(message=message_input.value, is_user=True)
-            messages_column.controls.append(msg)
-            all_messages.append(msg)
-
-            try:
-                ws.send(json.dumps(msg_data))
-            except Exception as ex:
-                page.open(ft.SnackBar(content=ft.Text(f"❌ Ошибка отправки: {ex}"), duration=3000))
-
-            message_input.value = ""
-            message_input.update()
-
-            mic_button.visible = True
-            attach_button.visible = True
-            send_button.visible = False
-            mic_button.update()
-            attach_button.update()
-            send_button.update()
-
-            messages_column.scroll_to(offset=-1, duration=300)
-            page.update()
-
-    # Отправка бинарного файла через WebSocket с метаданными
-    def send_file_via_websocket(file_path, file_name, file_type, one_time_view=False):
+    def send_file_via_ws(file_path: str, file_name: str, file_type: str, one_time_view: bool = False) -> bool:
+        """Отправляет бинарный файл с метаданными через WebSocket."""
         try:
             file_size = os.path.getsize(file_path)
-            MAX_SIZE = 50 * 1024 * 1024
-
-            if file_size > MAX_SIZE:
-                print(f"❌ Файл слишком большой: {file_size / 1024 / 1024:.1f} МБ")
-                page.open(ft.SnackBar(content=ft.Text("❌ Файл слишком большой! Максимум 50 МБ"), duration=3000))
+            if file_size > MAX_FILE_SIZE:
+                show_snack(f"❌ Файл слишком большой! Максимум 50 МБ")
                 return False
 
-            with open(file_path, 'rb') as f:
-                file_data = f.read()
+            with open(file_path, "rb") as f:
+                file_bytes = f.read()
 
-            metadata = {
-                "file_name": file_name,
-                "file_type": file_type,
-                "file_size": file_size
-            }
-
-            metadata_bytes = json.dumps(metadata).encode('utf-8')
-            separator = b"|||BINARY_DATA|||"
-            message_bytes = metadata_bytes + separator + file_data
-
-            ws.send_binary(message_bytes)
+            metadata = json.dumps({"file_name": file_name, "file_type": file_type, "file_size": file_size})
+            ws.send_binary(metadata.encode("utf-8") + FILE_SEPARATOR + file_bytes)
             return True
-
         except Exception as e:
-            print(f"❌ Ошибка отправки файла: {e}")
             import traceback
+            print(f"❌ Ошибка отправки файла: {e}")
             traceback.print_exc()
             return False
 
-    # Отправка команды удаления сообщения собеседнику
-    def send_delete_command(message_id, message_text):
+    def send_delete_command(msg_id: str, text: str) -> bool:
         try:
-            delete_data = {
+            ws.send(json.dumps({
                 "type": "delete",
-                "message_id": message_id,
-                "message_text": message_text,
+                "message_id": msg_id,
+                "message_text": text,
                 "sender_id": CURRENT_USER["id"],
-                "timestamp": datetime.datetime.now().timestamp()
-            }
-            ws.send(json.dumps(delete_data))
+                "timestamp": datetime.datetime.now().timestamp(),
+            }))
             return True
         except Exception as e:
-            print(f"❌ Ошибка отправки команды удаления: {e}")
+            print(f"❌ Ошибка команды удаления: {e}")
             return False
 
-    # Добавление входящего текстового сообщения в чат по sender_id
-    def add_incoming_text_message(text, sender_id=None):
-        is_user = (sender_id == CURRENT_USER["id"]) if sender_id is not None else False
-        msg = create_chat_message(message=text, is_user=is_user)
-        messages_column.controls.append(msg)
-        all_messages.append(msg)
-        messages_column.scroll_to(offset=-1, duration=300)
-        page.update()
+    # ── Работа с файлами ───────────────────────────────────────────────────────
 
-    # Добавление входящего изображения в чат по sender_id
-    def add_incoming_image(image_path, file_name, sender_id=None, one_time_view=False):
-        is_user = (sender_id == CURRENT_USER["id"]) if sender_id is not None else False
-        msg = create_image_message(image_path, file_name, is_user=is_user, one_time_view=one_time_view)
-        messages_column.controls.append(msg)
-        all_messages.append(msg)
-        messages_column.scroll_to(offset=-1, duration=300)
-        page.update()
+    def on_file_picked(e: ft.FilePickerResultEvent):
+        if e.files:
+            for f in e.files:
+                show_rename_dialog({"path": f.path, "name": f.name, "display_name": f.name})
 
-    # Добавление входящего видео в чат по sender_id
-    def add_incoming_video(video_path, file_name, sender_id=None):
-        is_user = (sender_id == CURRENT_USER["id"]) if sender_id is not None else False
-        msg = create_video_message(video_path, file_name, is_user=is_user)
-        messages_column.controls.append(msg)
-        all_messages.append(msg)
-        messages_column.scroll_to(offset=-1, duration=300)
-        page.update()
+    def show_rename_dialog(file_info: dict):
+        name_no_ext, ext = os.path.splitext(file_info["name"])
+        is_media = ext.lower() in IMAGE_EXTS | VIDEO_EXTS | AUDIO_EXTS
 
-    # Добавление входящего аудио в чат по sender_id
-    def add_incoming_audio(audio_path, file_name, sender_id=None):
-        is_user = (sender_id == CURRENT_USER["id"]) if sender_id is not None else False
-        msg = create_audio_message(audio_path, file_name, is_user=is_user)
-        messages_column.controls.append(msg)
-        all_messages.append(msg)
-        messages_column.scroll_to(offset=-1, duration=300)
-        page.update()
+        rename_field     = ft.TextField(value=name_no_ext, label="Название", expand=True, text_size=13)
+        one_time_cb      = ft.Checkbox(label="Одноразовый", value=False)
 
-    # Добавление входящего документа в чат по sender_id
-    def add_incoming_document(file_path, file_name, sender_id=None, file_type="Файл"):
-        is_user = (sender_id == CURRENT_USER["id"]) if sender_id is not None else False
-        msg = create_document_message(file_path, file_name, file_type, is_user=is_user)
-        messages_column.controls.append(msg)
-        all_messages.append(msg)
-        messages_column.scroll_to(offset=-1, duration=300)
-        page.update()
+        def confirm(e):
+            new_name = rename_field.value.strip() + ext
+            file_info["display_name"] = new_name or file_info["name"]
+            file_info["one_time_view"] = one_time_cb.value if is_media else False
+            page.close(dlg)
+            add_file_to_chat(file_info)
 
-    page.data = {
-        "add_incoming_text": add_incoming_text_message,
-        "add_incoming_image": add_incoming_image,
-        "add_incoming_video": add_incoming_video,
-        "add_incoming_audio": add_incoming_audio,
-        "add_incoming_document": add_incoming_document,
-    }
+        def skip(e):
+            file_info["display_name"] = file_info["name"]
+            file_info["one_time_view"] = one_time_cb.value if is_media else False
+            page.close(dlg)
+            add_file_to_chat(file_info)
 
-    # Заглушка для кнопки назад в шапке
-    def go_back(e):
-        pass
+        short_name = file_info["name"][:35] + "..." if len(file_info["name"]) > 35 else file_info["name"]
+        items = [ft.Text(short_name, size=11, weight=ft.FontWeight.BOLD), rename_field]
+        if is_media:
+            items.append(one_time_cb)
 
-    # Диалог подтверждения очистки всего чата
-    def clear_all_chat():
-        def confirm_clear(e):
-            messages_column.controls.clear()
-            all_messages.clear()
-            messages_column.update()
-            page.close(clear_dialog)
-            page.open(ft.SnackBar(content=ft.Text("🗑️ Чат очищен"), duration=2000))
-            page.update()
-
-        def cancel_clear(e):
-            page.close(clear_dialog)
-
-        clear_dialog = ft.AlertDialog(
-            title=ft.Text("Очистить чат?"),
-            content=ft.Text("Все сообщения будут удалены"),
+        dlg = ft.AlertDialog(
+            title=ft.Text("Отправка файла", size=15),
+            content=ft.Container(content=ft.Column(items, tight=True, spacing=10), width=280),
             actions=[
-                ft.TextButton("Отмена", on_click=cancel_clear),
-                ft.TextButton("Очистить", on_click=confirm_clear,
-                              style=ft.ButtonStyle(color=ft.Colors.RED)),
+                ft.TextButton("Отмена",    on_click=lambda e: page.close(dlg)),
+                ft.TextButton("Отправить", on_click=confirm),
             ],
         )
-        page.open(clear_dialog)
+        page.open(dlg)
 
-    # Диалог профиля собеседника с информацией и действиями
+    def add_file_to_chat(file_info: dict):
+        path         = file_info["path"]
+        display_name = file_info["display_name"]
+        one_time     = file_info.get("one_time_view", False)
+        ftype        = get_file_type(display_name)
+        saved_path   = auto_save_file(path, display_name)
+
+        send_file_via_ws(saved_path, display_name, ftype, one_time)
+
+        ext = get_file_ext(display_name)
+        if ext in IMAGE_EXTS:
+            widget = create_image_message(saved_path, display_name, is_user=True, one_time_view=one_time)
+        elif ext in VIDEO_EXTS:
+            widget = create_video_message(saved_path, display_name, is_user=True)
+        elif ext in AUDIO_EXTS:
+            widget = create_audio_message(saved_path, display_name, is_user=True, one_time_view=one_time)
+        else:
+            widget = create_document_message(saved_path, f"📎 {display_name}", "Файл", is_user=True)
+
+        messages_column.controls.append(widget)
+        all_messages.append(widget)
+        sent_media_files.append({"name": display_name, "type": ext, "path": saved_path})
+        scroll_to_bottom()
+        page.update()
+
+    # ── Обработка входящих сообщений ──────────────────────────────────────────
+
+    def handle_incoming_file(msg: dict):
+        try:
+            file_name = msg["file_name"]
+            file_type = msg["file_type"]
+            sender_id = msg.get("sender_id")
+
+            if sender_id != CONTACT_USER["id"]:
+                return
+
+            file_bytes = base64.b64decode(msg["file_data"])
+            timestamp  = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            save_name  = f"{timestamp}_{file_name}"
+            save_path  = os.path.join(INCOMING_FOLDER, save_name)
+
+            with open(save_path, "wb") as f:
+                f.write(file_bytes)
+
+            # Копия в assets для отображения через Flet
+            shutil.copy2(save_path, os.path.join(ASSETS_FOLDER, os.path.basename(save_path)))
+
+            ext = get_file_ext(file_name)
+            if ext in IMAGE_EXTS:
+                widget = create_image_message(save_path, file_name, is_user=False)
+            elif ext in VIDEO_EXTS:
+                widget = create_video_message(save_path, file_name, is_user=False)
+            elif ext in AUDIO_EXTS:
+                widget = create_audio_message(save_path, file_name, is_user=False)
+            else:
+                widget = create_document_message(save_path, f"📎 {file_name}", "Файл", is_user=False)
+
+            add_message_to_chat(widget)
+        except Exception as e:
+            import traceback
+            print(f"❌ Ошибка получения файла: {e}")
+            traceback.print_exc()
+
+    def poll_queue():
+        """Опрашивает очередь сообщений каждые 0.5 секунды."""
+        try:
+            while not message_queue.empty():
+                msg = message_queue.get_nowait()
+                if msg.get("type") == "file":
+                    handle_incoming_file(msg)
+                else:
+                    sender_id = msg.get("sender_id")
+                    text      = msg.get("message")
+                    if text and sender_id == CONTACT_USER["id"]:
+                        add_message_to_chat(create_text_message(text, is_user=False))
+        except queue.Empty:
+            pass
+        threading.Timer(0.5, poll_queue).start()
+
+    # ── Голосовые сообщения ────────────────────────────────────────────────────
+
+    recording_start = [None]
+    recording_label = ft.Text("Запись... 0:00", size=14)
+
+    def start_recording_timer():
+        recording_start[0] = time.time()
+        tick_recording()
+
+    def tick_recording():
+        if recording_start[0] and voice_panel.visible:
+            elapsed = int(time.time() - recording_start[0])
+            recording_label.value = f"Запись... {elapsed // 60}:{elapsed % 60:02d}"
+            recording_label.update()
+            threading.Timer(1.0, tick_recording).start()
+
+    def send_voice_message(audio_path: str, file_name: str, one_time: bool = False):
+        saved = auto_save_file(audio_path, file_name)
+        add_message_to_chat(create_audio_message(saved, "Голосовое сообщение", is_user=True, one_time_view=one_time))
+        if auto_save_folder[0] and saved != audio_path:
+            show_snack("✅ Голосовое сообщение сохранено")
+
+    # Строим панель записи
+    voice_one_time_cb = ft.Checkbox(label="Одноразовый", value=False)
+
+    def cancel_voice(e):
+        voice_panel.visible = False
+        recording_start[0]  = None
+        voice_one_time_cb.value = False
+        voice_panel.update()
+
+    def send_voice(e):
+        ts        = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        file_name = f"voice_{ts}.mp3"
+        file_path = os.path.join(VOICE_FOLDER, file_name)
+        try:
+            open(file_path, "w").close()  # заглушка для демо
+            send_voice_message(file_path, file_name, one_time=voice_one_time_cb.value)
+            show_snack("⚠️ Демо-версия. В реальном приложении — настоящая запись.")
+        except Exception as ex:
+            print(f"❌ Ошибка создания файла: {ex}")
+        voice_panel.visible = False
+        recording_start[0]  = None
+        voice_one_time_cb.value = False
+        voice_panel.update()
+
+    voice_panel = ft.Container(
+        visible=False,
+        content=ft.Column(
+            [
+                ft.Text("Запись голосового", size=14, weight=ft.FontWeight.BOLD),
+                ft.Row(
+                    [ft.Icon(ft.Icons.MIC, color=ft.Colors.RED, size=30), recording_label],
+                    alignment=ft.MainAxisAlignment.CENTER,
+                ),
+                voice_one_time_cb,
+                ft.Row(
+                    [
+                        ft.ElevatedButton("Отмена",    on_click=cancel_voice, bgcolor=ft.Colors.GREY_300),
+                        ft.ElevatedButton("Отправить", on_click=send_voice,
+                                          bgcolor=ft.Colors.BLUE, color=ft.Colors.WHITE),
+                    ],
+                    alignment=ft.MainAxisAlignment.CENTER, spacing=10,
+                ),
+            ],
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            spacing=10,
+        ),
+        bgcolor=ft.Colors.WHITE,
+        border_radius=10, padding=15,
+        shadow=ft.BoxShadow(spread_radius=1, blur_radius=15, color=ft.Colors.BLACK54, offset=ft.Offset(0, 0)),
+    )
+
+    def toggle_voice(e):
+        voice_panel.visible = not voice_panel.visible
+        if voice_panel.visible:
+            start_recording_timer()
+        voice_panel.update()
+
+    # ── Кнопки ввода ──────────────────────────────────────────────────────────
+
+    def reset_input_buttons():
+        mic_btn.visible    = True
+        attach_btn.visible = True
+        send_btn.visible   = False
+        for b in (mic_btn, attach_btn, send_btn):
+            b.update()
+
+    def on_text_change(e):
+        has_text = bool(message_input.value.strip())
+        mic_btn.visible    = not has_text
+        attach_btn.visible = not has_text
+        send_btn.visible   = has_text
+        for b in (mic_btn, attach_btn, send_btn):
+            b.update()
+
+    message_input = ft.TextField(
+        hint_text="Введите сообщение...",
+        expand=True, multiline=True, min_lines=1, max_lines=3,
+        on_change=on_text_change,
+    )
+
+    file_picker = ft.FilePicker(on_result=on_file_picked)
+    page.overlay.append(file_picker)
+
+    mic_btn    = ft.IconButton(icon=ft.Icons.KEYBOARD_VOICE, on_click=toggle_voice,
+                               icon_color=ft.Colors.BLUE, visible=True)
+    attach_btn = ft.IconButton(icon=ft.Icons.ATTACH_FILE, icon_color=ft.Colors.BLUE,
+                               tooltip="Прикрепить файл", visible=True,
+                               on_click=lambda e: file_picker.pick_files(
+                                   allow_multiple=True, dialog_title="Выберите файлы"))
+    send_btn   = ft.IconButton(icon=ft.Icons.SEND, on_click=send_text_message,
+                               icon_color=ft.Colors.BLUE, visible=False)
+
+    # ── Шапка чата ────────────────────────────────────────────────────────────
+
     def show_user_profile(e):
-        def close_profile(e):
-            page.close(profile_dialog)
+        def close(e): page.close(dlg)
 
-        def call_user(e):
-            page.open(ft.SnackBar(content=ft.Text("📞 Звонок..."), duration=2000))
-            page.update()
-
-        def video_call_user(e):
-            page.open(ft.SnackBar(content=ft.Text("📹 Видеозвонок..."), duration=2000))
-            page.update()
-
-        def search_messages(e):
-            page.open(ft.SnackBar(content=ft.Text("🔍 Поиск по сообщениям..."), duration=2000))
-            page.update()
-
-        def mute_notifications(e):
-            page.open(ft.SnackBar(content=ft.Text("🔕 Уведомления отключены"), duration=2000))
-            page.update()
-
-        def block_user(e):
-            page.open(ft.SnackBar(content=ft.Text("🚫 Пользователь заблокирован"), duration=2000))
-            page.update()
-
-        big_avatar = create_avatar_widget(CONTACT_USER, size=160)
-
-        profile_dialog = ft.AlertDialog(
+        big_avatar = make_avatar(CONTACT_USER, size=160)
+        dlg = ft.AlertDialog(
             content=ft.Container(
                 content=ft.Column(
                     [
@@ -1175,84 +1033,20 @@ def main(page: ft.Page):
                                 text_align=ft.TextAlign.CENTER),
                         ft.Container(
                             content=ft.Text(CONTACT_USER["status"], size=14, color=ft.Colors.GREEN),
-                            alignment=ft.alignment.center,
-                            padding=10,
-                        ),
-                        ft.Divider(),
-                        ft.Row(
-                            [
-                                ft.Column(
-                                    [
-                                        ft.IconButton(icon=ft.Icons.CALL, icon_color=ft.Colors.GREEN,
-                                                      icon_size=30, on_click=call_user, tooltip="Позвонить"),
-                                        ft.Text("Позвонить", size=12),
-                                    ],
-                                    horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=5,
-                                ),
-                                ft.Column(
-                                    [
-                                        ft.IconButton(icon=ft.Icons.VIDEOCAM, icon_color=ft.Colors.BLUE,
-                                                      icon_size=30, on_click=video_call_user, tooltip="Видеозвонок"),
-                                        ft.Text("Видео", size=12),
-                                    ],
-                                    horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=5,
-                                ),
-                                ft.Column(
-                                    [
-                                        ft.IconButton(icon=ft.Icons.SEARCH, icon_color=ft.Colors.ORANGE,
-                                                      icon_size=30, on_click=search_messages, tooltip="Поиск"),
-                                        ft.Text("Поиск", size=12),
-                                    ],
-                                    horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=5,
-                                ),
-                            ],
-                            alignment=ft.MainAxisAlignment.SPACE_EVENLY,
+                            alignment=ft.alignment.center, padding=10,
                         ),
                         ft.Divider(),
                         ft.Container(
                             content=ft.Column(
                                 [
-                                    ft.Row(
-                                        [
-                                            ft.Icon(ft.Icons.INFO_OUTLINE, size=20, color=ft.Colors.GREY),
-                                            ft.Column(
-                                                [
-                                                    ft.Text("О себе", size=12, color=ft.Colors.GREY),
-                                                    ft.Text(CONTACT_USER["about"], size=14),
-                                                ],
-                                                spacing=2,
-                                            ),
-                                        ],
-                                        spacing=10,
-                                    ),
+                                    _info_row(ft.Icons.INFO_OUTLINE,       "О себе",
+                                              CONTACT_USER["about"]),
                                     ft.Divider(height=20),
-                                    ft.Row(
-                                        [
-                                            ft.Icon(ft.Icons.PHOTO_LIBRARY, size=20, color=ft.Colors.GREY),
-                                            ft.Column(
-                                                [
-                                                    ft.Text("Отправленные файлы", size=12, color=ft.Colors.GREY),
-                                                    ft.Text(f"{len(sent_media_files)} файлов", size=14),
-                                                ],
-                                                spacing=2,
-                                            ),
-                                        ],
-                                        spacing=10,
-                                    ),
+                                    _info_row(ft.Icons.PHOTO_LIBRARY,      "Отправленные файлы",
+                                              f"{len(sent_media_files)} файлов"),
                                     ft.Divider(height=20),
-                                    ft.Row(
-                                        [
-                                            ft.Icon(ft.Icons.CHAT_BUBBLE_OUTLINE, size=20, color=ft.Colors.GREY),
-                                            ft.Column(
-                                                [
-                                                    ft.Text("Сообщений", size=12, color=ft.Colors.GREY),
-                                                    ft.Text(f"{len(all_messages)} сообщений", size=14),
-                                                ],
-                                                spacing=2,
-                                            ),
-                                        ],
-                                        spacing=10,
-                                    ),
+                                    _info_row(ft.Icons.CHAT_BUBBLE_OUTLINE, "Сообщений",
+                                              f"{len(all_messages)} сообщений"),
                                 ],
                                 spacing=10,
                             ),
@@ -1262,261 +1056,155 @@ def main(page: ft.Page):
                         ft.Column(
                             [
                                 ft.TextButton(
-                                    content=ft.Row(
-                                        [
-                                            ft.Icon(ft.Icons.NOTIFICATIONS_OFF, color=ft.Colors.GREY),
-                                            ft.Text("Отключить уведомления", size=14),
-                                        ],
-                                        spacing=10,
-                                    ),
-                                    on_click=mute_notifications,
+                                    content=ft.Row([ft.Icon(ft.Icons.NOTIFICATIONS_OFF, color=ft.Colors.GREY),
+                                                    ft.Text("Отключить уведомления", size=14)], spacing=10),
+                                    on_click=lambda e: show_snack("🔕 Уведомления отключены"),
                                 ),
                                 ft.TextButton(
-                                    content=ft.Row(
-                                        [
-                                            ft.Icon(ft.Icons.BLOCK, color=ft.Colors.RED),
-                                            ft.Text("Заблокировать", size=14, color=ft.Colors.RED),
-                                        ],
-                                        spacing=10,
-                                    ),
-                                    on_click=block_user,
+                                    content=ft.Row([ft.Icon(ft.Icons.BLOCK, color=ft.Colors.RED),
+                                                    ft.Text("Заблокировать", size=14, color=ft.Colors.RED)], spacing=10),
+                                    on_click=lambda e: show_snack("🚫 Пользователь заблокирован"),
                                 ),
                             ],
                             spacing=5,
                         ),
                     ],
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                    spacing=10,
-                    scroll=ft.ScrollMode.AUTO,
+                    spacing=10, scroll=ft.ScrollMode.AUTO,
                 ),
-                width=400,
-                height=700,
+                width=400, height=700,
             ),
-            actions=[ft.TextButton("Закрыть", on_click=close_profile)],
+            actions=[ft.TextButton("Закрыть", on_click=close)],
         )
-        page.open(profile_dialog)
+        page.open(dlg)
 
-    # Создание шапки чата с аватаром, именем собеседника и кнопками
-    def create_chat_header():
-        contact_avatar = create_avatar_widget(CONTACT_USER)
-
-        return ft.Container(
-            content=ft.Row(
-                [
-                    ft.IconButton(icon=ft.Icons.ARROW_BACK, on_click=go_back, icon_color=ft.Colors.BLUE),
-                    ft.GestureDetector(
-                        content=ft.Row(
-                            [
-                                contact_avatar,
-                                ft.Column(
-                                    [
-                                        ft.Text(CONTACT_USER["name"], weight=ft.FontWeight.BOLD, size=16),
-                                        ft.Text(CONTACT_USER["last_seen"], size=12, color=ft.Colors.GREY),
-                                    ],
-                                    spacing=0,
-                                ),
-                            ],
-                            alignment=ft.MainAxisAlignment.START,
-                        ),
-                        on_tap=show_user_profile,
-                    ),
-                    ft.Container(expand=True),
-                    ft.IconButton(
-                        icon=ft.Icons.DELETE_SWEEP, icon_color=ft.Colors.RED,
-                        tooltip="Очистить весь чат", on_click=lambda e: clear_all_chat(),
-                    ),
-                ],
-                alignment=ft.MainAxisAlignment.START,
-            ),
-            padding=15,
-            bgcolor=ft.Colors.WHITE,
-            border=ft.border.only(bottom=ft.border.BorderSide(1, ft.Colors.GREY_300)),
+    def _profile_action(icon, label, color, handler):
+        return ft.Column(
+            [
+                ft.IconButton(icon=icon, icon_color=color, icon_size=30, on_click=handler, tooltip=label),
+                ft.Text(label, size=12),
+            ],
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=5,
         )
 
-    recording_time_text = ft.Text("Запись... 0:00", size=14)
-
-    # Создание панели записи голосового сообщения
-    def create_voice_recorder():
-        voice_one_time_checkbox = ft.Checkbox(label="Одноразовый", value=False)
-
-        # Отмена записи и скрытие панели
-        def cancel_recording():
-            voice_container.visible = False
-            recording_start_time[0] = None
-            voice_one_time_checkbox.value = False
-            voice_container.update()
-
-        # Завершение записи и отправка голосового сообщения
-        def send_recording():
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            file_name = f"voice_{timestamp}.mp3"
-            file_path = os.path.join(voice_recordings_folder, file_name)
-
-            try:
-                with open(file_path, 'w') as f:
-                    f.write("")
-
-                send_voice_message(file_path, file_name, one_time=voice_one_time_checkbox.value)
-                page.open(ft.SnackBar(
-                    content=ft.Text("⚠️ Это демо-версия. В реальном приложении здесь будет настоящая запись."),
-                    duration=3000
-                ))
-                page.update()
-            except Exception as e:
-                print(f"❌ Ошибка создания файла: {e}")
-
-            voice_container.visible = False
-            recording_start_time[0] = None
-            voice_one_time_checkbox.value = False
-            voice_container.update()
-
-        voice_container = ft.Container(
-            content=ft.Column(
-                [
-                    ft.Text("Запись голосового", size=14, weight=ft.FontWeight.BOLD),
-                    ft.Row(
-                        [
-                            ft.Icon(ft.Icons.MIC, color=ft.Colors.RED, size=30),
-                            recording_time_text,
-                        ],
-                        alignment=ft.MainAxisAlignment.CENTER,
-                    ),
-                    voice_one_time_checkbox,
-                    ft.Row(
-                        [
-                            ft.ElevatedButton("Отмена", on_click=lambda e: cancel_recording(),
-                                              bgcolor=ft.Colors.GREY_300),
-                            ft.ElevatedButton("Отправить", on_click=lambda e: send_recording(),
-                                              bgcolor=ft.Colors.BLUE, color=ft.Colors.WHITE),
-                        ],
-                        alignment=ft.MainAxisAlignment.CENTER,
-                        spacing=10,
-                    ),
-                ],
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=10,
-            ),
-            bgcolor=ft.Colors.WHITE,
-            border_radius=10,
-            padding=15,
-            visible=False,
-            shadow=ft.BoxShadow(
-                spread_radius=1, blur_radius=15,
-                color=ft.Colors.BLACK54, offset=ft.Offset(0, 0),
-            ),
+    def _info_row(icon, title, value):
+        return ft.Row(
+            [
+                ft.Icon(icon, size=20, color=ft.Colors.GREY),
+                ft.Column(
+                    [ft.Text(title, size=12, color=ft.Colors.GREY), ft.Text(value, size=14)],
+                    spacing=2,
+                ),
+            ],
+            spacing=10,
         )
-        return voice_container
 
-    voice_recorder = create_voice_recorder()
+    def clear_all_chat():
+        def confirm(e):
+            messages_column.controls.clear()
+            all_messages.clear()
+            sent_media_files.clear()
+            messages_column.update()
+            page.close(dlg)
 
-    mic_button = ft.IconButton(
-        icon=ft.Icons.KEYBOARD_VOICE, on_click=toggle_voice_recorder,
-        icon_color=ft.Colors.BLUE, visible=True,
-    )
+            # Удаляем все файлы из папок чата
+            for folder in (ASSETS_FOLDER, INCOMING_FOLDER, VOICE_FOLDER):
+                if os.path.exists(folder):
+                    for filename in os.listdir(folder):
+                        file_path = os.path.join(folder, filename)
+                        try:
+                            if os.path.isfile(file_path):
+                                os.remove(file_path)
+                        except Exception as ex:
+                            print(f"❌ Ошибка удаления файла {file_path}: {ex}")
 
-    attach_button = ft.IconButton(
-        icon=ft.Icons.ATTACH_FILE, on_click=open_file_picker,
-        icon_color=ft.Colors.BLUE, visible=True, tooltip="Прикрепить файл",
-    )
+            show_snack("🗑️ Чат очищен")
 
-    send_button = ft.IconButton(
-        icon=ft.Icons.SEND, on_click=send_message,
-        icon_color=ft.Colors.BLUE, visible=False,
-    )
+        dlg = ft.AlertDialog(
+            title=ft.Text("Очистить чат?"),
+            content=ft.Text("Все сообщения будут удалены"),
+            actions=[
+                ft.TextButton("Отмена",   on_click=lambda e: page.close(dlg)),
+                ft.TextButton("Очистить", on_click=confirm,
+                              style=ft.ButtonStyle(color=ft.Colors.RED)),
+            ],
+        )
+        page.open(dlg)
 
-    chat_header = create_chat_header()
-
-    input_row = ft.Container(
+    chat_header = ft.Container(
         content=ft.Row(
-            [attach_button, message_input, mic_button, send_button],
+            [
+                ft.IconButton(icon=ft.Icons.ARROW_BACK, on_click=lambda e: None,
+                              icon_color=ft.Colors.BLUE),
+                ft.GestureDetector(
+                    content=ft.Row(
+                        [
+                            make_avatar(CONTACT_USER),
+                            ft.Column(
+                                [
+                                    ft.Text(CONTACT_USER["name"], weight=ft.FontWeight.BOLD, size=16),
+                                    ft.Text(CONTACT_USER["last_seen"], size=12, color=ft.Colors.GREY),
+                                ],
+                                spacing=0,
+                            ),
+                        ],
+                        alignment=ft.MainAxisAlignment.START,
+                    ),
+                    on_tap=show_user_profile,
+                ),
+                ft.Container(expand=True),
+                ft.IconButton(
+                    icon=ft.Icons.DELETE_SWEEP, icon_color=ft.Colors.RED,
+                    tooltip="Очистить весь чат",
+                    on_click=lambda e: clear_all_chat(),
+                ),
+            ],
+            alignment=ft.MainAxisAlignment.START,
+        ),
+        padding=15,
+        bgcolor=ft.Colors.WHITE,
+        border=ft.border.only(bottom=ft.border.BorderSide(1, ft.Colors.GREY_300)),
+    )
+
+    # ── Сборка страницы ────────────────────────────────────────────────────────
+
+    input_bar = ft.Container(
+        content=ft.Row(
+            [attach_btn, message_input, mic_btn, send_btn],
             vertical_alignment=ft.CrossAxisAlignment.END,
         ),
         padding=10,
         bgcolor=ft.Colors.WHITE,
     )
 
-    # Проверка очереди входящих сообщений и отображение их в чате
-    def check_messages():
-        try:
-            while not message_queue.empty():
-                msg = message_queue.get_nowait()
-                if "type" in msg and msg["type"] == "file":
-                    handle_incoming_file(msg)
-                else:
-                    sender_id = msg.get("sender_id")
-                    text = msg.get("message")
-                    if text and sender_id == CONTACT_USER["id"]:
-                        msg_widget = create_chat_message(text, is_user=False)
-                        messages_column.controls.append(msg_widget)
-                        all_messages.append(msg_widget)
-                        messages_column.scroll_to(offset=-1, duration=300)
-                        page.update()
-        except queue.Empty:
-            pass
-        threading.Timer(0.5, check_messages).start()
+    # Экспортируем хелперы для внешнего использования (аналог оригинального page.data)
+    page.data = {
+        "add_incoming_text":     lambda text, sid=None: add_message_to_chat(
+            create_text_message(text, is_user=(sid == CURRENT_USER["id"]))),
+        "add_incoming_image":    lambda path, name, sid=None, ot=False: add_message_to_chat(
+            create_image_message(path, name, is_user=(sid == CURRENT_USER["id"]), one_time_view=ot)),
+        "add_incoming_video":    lambda path, name, sid=None: add_message_to_chat(
+            create_video_message(path, name, is_user=(sid == CURRENT_USER["id"]))),
+        "add_incoming_audio":    lambda path, name, sid=None: add_message_to_chat(
+            create_audio_message(path, name, is_user=(sid == CURRENT_USER["id"]))),
+        "add_incoming_document": lambda path, name, sid=None, ftype="Файл": add_message_to_chat(
+            create_document_message(path, name, ftype, is_user=(sid == CURRENT_USER["id"]))),
+    }
 
-    # Обработка входящего файла: сохранение на диск и отображение в чате
-    def handle_incoming_file(file_msg):
-        try:
-            file_name = file_msg.get("file_name")
-            file_type = file_msg.get("file_type")
-            file_data_b64 = file_msg.get("file_data")
-            sender_id = file_msg.get("sender_id")
-
-            file_data = base64.b64decode(file_data_b64)
-
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            safe_name = f"{timestamp}_{file_name}"
-            file_path = os.path.join(INCOMING_FILES_FOLDER, safe_name)
-
-            with open(file_path, 'wb') as f:
-                f.write(file_data)
-
-            check_file_permissions(file_path)
-            asset_path = os.path.join(ASSETS_FOLDER, os.path.basename(file_path))
-            shutil.copy2(file_path, asset_path)
-
-            if sender_id == CONTACT_USER["id"]:
-                if file_type == "image" or file_name.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp')):
-                    msg_widget = create_image_message(file_path, file_name, is_user=False)
-                elif file_type == "video" or file_name.lower().endswith(('.mp4', '.avi', '.mov', '.mkv', '.webm')):
-                    msg_widget = create_video_message(file_path, file_name, is_user=False)
-                elif file_type == "audio" or file_name.lower().endswith(('.mp3', '.wav', '.ogg', '.m4a')):
-                    msg_widget = create_audio_message(file_path, file_name, is_user=False)
-                else:
-                    msg_widget = create_document_message(file_path, f"📎 {file_name}", "Файл", is_user=False)
-
-                messages_column.controls.append(msg_widget)
-                all_messages.append(msg_widget)
-                messages_column.scroll_to(offset=-1, duration=300)
-                page.update()
-
-        except Exception as e:
-            print(f"❌ Ошибка при получении файла: {e}")
-            import traceback
-            traceback.print_exc()
-
-    check_messages()
-
-    chat_container = ft.Container(
+    page.add(ft.Container(
+        expand=True,
         content=ft.Column(
             [
                 chat_header,
-                ft.Container(
-                    content=messages_column,
-                    expand=True,
-                    padding=10,
-                    bgcolor=ft.Colors.GREY_100,
-                ),
-                voice_recorder,
-                input_row,
+                ft.Container(content=messages_column, expand=True, padding=10, bgcolor=ft.Colors.GREY_100),
+                voice_panel,
+                input_bar,
             ],
             expand=True,
         ),
-        expand=True,
-    )
+    ))
 
-    page.add(chat_container)
+    poll_queue()
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ import requests as rq
 import websocket
 import redis
 import asyncio
+import queue
 import json
 import os
 from redis.asyncio import Redis
@@ -41,11 +42,54 @@ ws_auth.send(json.dumps({
     "room": "lobbi_1",
     "user_id": 3,
     "guest_id": 4,
-    "status_chat": "new_chat",
+    "status_chat": "existing_chat",
     "token": "api87"
-}))
+}))#existing_chat
+
+
+# Создаем очередь для сообщений
+message_queue = queue.Queue()
 
 # Получаем ответ
+response = ws_auth.recv()
+print(f"Auth response: {response}")
+ws_auth.close()
+
+# 2. Подключаемся к чату
+ws = websocket.WebSocket()
+ws.connect("ws://127.0.0.1:5000/ws/chat_user/api87/")
+
+def receive_messages():
+    while True:
+        try:
+            message = ws.recv()
+            print(f"\nReceived: {message}")
+            # КЛАДЕМ сообщение в очередь вместо прямого вывода
+            message_queue.put(message)
+        except Exception as e:
+            print(f"\nDisconnected: {e}")
+            break
+
+# Запускаем поток для прослушивания
+thread = threading.Thread(target=receive_messages, daemon=True)
+thread.start()
+
+# 3. Основной цикл обработки
+while True:
+    try:
+        received_msg = message_queue.get_nowait()
+        received_msg_dict = json.loads(received_msg)
+    except queue.Empty:
+        pass
+    message = input()
+    ws.send(json.dumps({"message": message}))
+
+ws.close()
+
+
+
+
+'''# Получаем ответ
 response = ws_auth.recv()
 print(f"Auth response: {response}")
 ws_auth.close()
@@ -79,7 +123,7 @@ while True:
     ws.send(json.dumps({"message": message}))
     # НЕ вызываем ws.recv() здесь - это делает отдельный поток
 
-ws.close()
+ws.close()'''
 
 
 

@@ -22,7 +22,7 @@ with ql.connect(db_path) as con:
         """)
     cur.close()
 
-rq.post("http://localhost:5000/api/v2/user/sesion/", json={"action": 'online'})
+#rq.post("http://localhost:5000/api/v2/user/sesion/", json={"action": 'online'})
 
 def main(page: ft.Page):
     def route_change(route):
@@ -58,5 +58,5 @@ def main(page: ft.Page):
     #page.on_view_pop = view_pop
     page.go(page.route)
 
-ft.app(main, view=ft.AppView.WEB_BROWSER,port=8000)
+ft.app(target=main, view=ft.WEB_BROWSER, port=8080)
 #ft.app(main)

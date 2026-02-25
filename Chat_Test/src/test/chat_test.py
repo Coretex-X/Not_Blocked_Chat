@@ -293,4 +293,4 @@ def main(page: ft.Page):
     page.add(chat_container)
 
 if __name__ == "__main__":
-    ft.app(target=main, view=ft.AppView.WEB_BROWSER, port=8000)
+    ft.app(target=main)

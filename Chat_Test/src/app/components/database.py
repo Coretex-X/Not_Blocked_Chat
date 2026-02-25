@@ -144,6 +144,6 @@ def get_user_data(db_path):
         try:
             cur.execute("SELECT name, profile FROM users_data")
             result = cur.fetchall()
-            return result[0] if result else ['Гость', 'None']
+            return result[0] if result else ['None', 'None']
         except sql.OperationalError:
-            return ['Гость', 'None']
+            return ['None', 'None']

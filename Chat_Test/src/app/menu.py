@@ -43,7 +43,7 @@ from .components.dialogs import create_exit_dialog, create_delete_chat_dialog, c
 from .components.handlers import setup_handlers
 
 def main_menu(page):
-    page.title = 'AppChat'
+    #page.title = 'AppChat'
     user_profil = 'None'
     
     # Пути к базам данных
@@ -189,7 +189,7 @@ def main_menu(page):
                             content=ft.Column(
                                 controls=[
                                     ft.CircleAvatar(
-                                        foreground_image_src='/home/archlinux05/ChatApp/TestServerApp/media/images/Z.png',
+                                        foreground_image_src='/home/archlinux05/Home/Photo/Z.png',
                                         radius=40,
                                     ),
                                     ft.Text(
@@ -243,37 +243,7 @@ def main_menu(page):
                         ),
                         on_click=handlers['soon_popup'],
                     ),
-                    ft.PopupMenuItem(
-                        content=ft.Row(
-                            controls=[
-                                ft.Icon(ft.Icons.SMART_TOY, size=20),
-                                ft.Text('Чат с ИИ'),
-                            ],
-                            spacing=10,
-                        ),
-                        on_click=handlers['soon_popup'],
-                    ),
                     ft.PopupMenuItem(),
-                    ft.PopupMenuItem(
-                        content=ft.Row(
-                            controls=[
-                                ft.Icon(ft.Icons.DATA_SAVER_OFF, size=20),
-                                ft.Text("Статус"),
-                            ],
-                            spacing=10,
-                        ),
-                        on_click=lambda _: page.go('/status')
-                    ),
-                    ft.PopupMenuItem(
-                        content=ft.Row(
-                            controls=[
-                                ft.Icon(ft.Icons.CALL, size=20),
-                                ft.Text("Звонки"),
-                            ],
-                            spacing=10,
-                        ),
-                        on_click=handlers['soon_popup'],
-                    ),
                     ft.PopupMenuItem(
                         content=ft.Row(
                             controls=[
@@ -285,16 +255,6 @@ def main_menu(page):
                         on_click=lambda _: page.go('/settings')
                     ),
                     ft.PopupMenuItem(),
-                    ft.PopupMenuItem(
-                        content=ft.Row(
-                            controls=[
-                                ft.Text("Войти"),
-                                ft.Icon(ft.Icons.LOGIN, size=20)
-                            ],
-                            spacing=10,
-                        ),
-                        on_click=lambda _: page.go('/login'),
-                    ),
                     ft.PopupMenuItem(
                         content=ft.Row(
                             controls=[
@@ -335,14 +295,6 @@ def main_menu(page):
                 ),
             ),
             ft.Tab(
-                text='Контакты',
-                icon=ft.Icons.CONTACTS,
-                content=ft.Container(
-                    content=contacts_tab_content,
-                    padding=ft.padding.symmetric(horizontal=5, vertical=10),
-                ),
-            ),
-            ft.Tab(
                 text="Группы",
                 icon=ft.Icons.GROUP,
                 content=ft.Container(
@@ -355,9 +307,31 @@ def main_menu(page):
                             on_click=handlers['soon_popup'],
                             mini=True
                         )
-                    ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=20),
+                    ], 
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=20),
                     alignment=ft.alignment.center,
                     padding=50
+                ),
+            ),
+            ft.Tab(
+                text="Избранное",
+                icon=ft.Icons.STAR,
+                content=ft.Container(
+                    content=ft.Column([
+                        ft.Icon(ft.Icons.GROUP, size=50, color=ft.Colors.GREY),
+                        ft.Text("Избранные чаты", size=16, color=ft.Colors.GREY),
+                    ], 
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10),
+                    alignment=ft.alignment.center,
+                    padding=50
+                ),
+            ),
+            ft.Tab(
+                text='Контакты',
+                icon=ft.Icons.CONTACTS,
+                content=ft.Container(
+                    content=contacts_tab_content,
+                    padding=ft.padding.symmetric(horizontal=5, vertical=10),
                 ),
             ),
         ],

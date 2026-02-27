@@ -12,6 +12,11 @@ import base64
 import websocket
 import threading
 import queue
+import sqlite3
+import path  # ваш модуль с путями
+
+
+db_path = f"{path.db_path()}user_data.db"
 
 # ─────────────────────────── Константы ────────────────────────────────────────
 
@@ -33,8 +38,8 @@ for folder in (INCOMING_FOLDER, ASSETS_FOLDER, VOICE_FOLDER):
 
 # ─────────────────────────── Данные пользователей ─────────────────────────────
 
-MY_ID      = 4
-CONTACT_ID = 3
+MY_ID      = 3
+CONTACT_ID = 4
 
 CURRENT_USER = {
     "id": MY_ID,
@@ -154,10 +159,8 @@ def now_hm() -> str:
 
 # ─────────────────────────── Главная функция ──────────────────────────────────
 
-def main(page: ft.Page):
-    page.title      = "Chat Messenger"
-    page.theme_mode = ft.ThemeMode.LIGHT
-    page.padding    = 0
+def chat_view(page: ft.Page) -> ft.View:
+    """Возвращает ft.View для маршрута /chat."""
 
     # Списки сообщений
     messages_column   = ft.Column(scroll=ft.ScrollMode.ALWAYS, expand=True)
@@ -1334,7 +1337,7 @@ def main(page: ft.Page):
     chat_header = ft.Container(
         content=ft.Row(
             [
-                ft.IconButton(icon=ft.Icons.ARROW_BACK, on_click=lambda e: None,
+                ft.IconButton(icon=ft.Icons.ARROW_BACK, on_click=lambda e: page.go('/'),
                               icon_color=ft.Colors.BLUE),
                 ft.GestureDetector(
                     content=ft.Row(
@@ -1383,7 +1386,6 @@ def main(page: ft.Page):
         bgcolor=ft.Colors.WHITE,
     )
 
-    # Экспортируем хелперы для внешнего использования (аналог оригинального page.data)
     page.data = {
         "add_incoming_text":     lambda text, sid=None: add_message_to_chat(
             create_text_message(text, is_user=(sid == CURRENT_USER["id"]))),
@@ -1397,21 +1399,24 @@ def main(page: ft.Page):
             create_document_message(path, name, ftype, is_user=(sid == CURRENT_USER["id"]))),
     }
 
-    page.add(ft.Container(
-        expand=True,
-        content=ft.Column(
-            [
-                chat_header,
-                ft.Container(content=messages_column, expand=True, padding=10, bgcolor=ft.Colors.GREY_100),
-                voice_panel,
-                input_bar,
-            ],
-            expand=True,
-        ),
-    ))
-
     poll_queue()
 
-
-if __name__ == "__main__":
-    ft.app(target=main)
+    return ft.View(
+        "/chat",
+        controls=[
+            ft.Container(
+                expand=True,
+                content=ft.Column(
+                    [
+                        chat_header,
+                        ft.Container(content=messages_column, expand=True, padding=10, bgcolor=ft.Colors.GREY_100),
+                        voice_panel,
+                        input_bar,
+                    ],
+                    expand=True,
+                ),
+            )
+        ],
+        padding=0,
+        bgcolor=ft.Colors.WHITE,
+    )

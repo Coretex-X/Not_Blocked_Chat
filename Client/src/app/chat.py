@@ -20,9 +20,9 @@ db_path = f"{path.db_path()}user_data.db"
 
 # ─────────────────────────── Константы ────────────────────────────────────────
 
-INCOMING_FOLDER = "incoming_files1"
-ASSETS_FOLDER   = "assets"
-VOICE_FOLDER    = "voice_recordings"
+INCOMING_FOLDER = "assets/data.media/incoming_files"
+ASSETS_FOLDER   = "assets/data.media/assets"
+VOICE_FOLDER    = "assets/data.media/voice_recordings"
 SETTINGS_FILE   = "chat_settings.json"
 WS_URL_DATA     = "ws://127.0.0.1:5000/ws/data/"
 WS_URL_CHAT     = "ws://127.0.0.1:5000/ws/chat_user/api87/"
@@ -38,8 +38,8 @@ for folder in (INCOMING_FOLDER, ASSETS_FOLDER, VOICE_FOLDER):
 
 # ─────────────────────────── Данные пользователей ─────────────────────────────
 
-MY_ID      = 3
-CONTACT_ID = 4
+MY_ID      = "None"
+CONTACT_ID = "None"
 
 CURRENT_USER = {
     "id": MY_ID,
@@ -72,7 +72,7 @@ def authenticate():
     conn = websocket.WebSocket()
     conn.connect(WS_URL_DATA)
     conn.send(json.dumps({
-        "room": "lobbi_1",
+        "room": "None",
         "user_id": MY_ID,
         "guest_id": CONTACT_ID,
         "status_chat": "existing_chat",

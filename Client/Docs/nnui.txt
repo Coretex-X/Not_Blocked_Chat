@@ -27,9 +27,13 @@ Chat_Test__
                 |       |             config.jsonc
                 |       |
                 |       image__
-                |               |
-                |               not_blocked_chat.ico
-                |               user.png
+                |       |      |
+                |       |      not_blocked_chat.ico
+                |       |      user.png
+                |       |
+                |       avatars_user__
+                |                     |
+                |
                 |
                 main.py
                 path.py
@@ -58,13 +62,11 @@ with ql.connect(db_path) as con:
     cur = con.cursor()
     cur.execute("""
         CREATE TABLE IF NOT EXISTS users_data(
-        id_user TEXT,
+        id_user INTEGER,
         name TEXT,
         profile TEXT,
         number TEXT,
-        token TEXT,
-        PRIMARY KEY (access_token)
-        );
+        token TEXT)
         """)
     cur.close()
 
@@ -145,15 +147,16 @@ def init_database(db_path):
         cur = con.cursor()
         
         # Таблица контактов
-        cur.execute('''
-            CREATE TABLE IF NOT EXISTS contacts (
-                user_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT NOT NULL,
-                status TEXT,
-                phone TEXT,
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users_data(
+                id_user INTEGER,
+                name TEXT,
+                profile TEXT,
+                number TEXT,
+                token TEXT,
                 avatar TEXT
-            )
-        ''')
+            )"""
+        )
         
         # Таблица чатов
         cur.execute('''
@@ -2824,45 +2827,35 @@ def main_sign_up(page: ft.Page):
                 )
                 
         if response.status_code == 200:
-                    json_response = response.json()
-                    # Извлекаем токены
-                    id_user = json_response["id_users"]
-                    name = json_response["name"]
-                    message = json_response["meaning"]
-                    with ql.connect(db_path) as con:
-                        cur = con.cursor()
-                        cur.execute("""
-                            CREATE TABLE IF NOT EXISTS users_data(
-                            id_user TEXT,                            
-                            name TEXT,
-                            profile TEXT,
-                            PRIMARY KEY (access_token)
-                            );
-                        """)
-                        cur.execute(f"INSERT INTO users_data (access_token, name) VALUES ('{id_user}', '{name}')")
+            json_response = response.json()
+            # Извлекаем данные из ответа
+            id_user = json_response["id_users"]
+            name = json_response["login"]
+            number = json_response["number"]
+            token = json_response["token"]
+            status = json_response["status"]
 
-                        data['is_authenticated'] = True
+            with ql.connect(db_path) as con:
+                cur = con.cursor()
+                cur.execute(f"INSERT INTO users_data (id_user, name, number, token, status) VALUES ('{id_user}', '{name}', '{number}', '{token}', '{status}')")
 
-                        with open(json_path, 'w') as f:
-                            js.dump(data, f, indent=4)  # indent для красивого форматирования
+                data['is_authenticated'] = True
 
-                        print(message)
-                        # Очистка полей после успешной отправки
-                        text_input_login.value = ""
-                        text_input_password.value = ""
-                        #Перенапровляем на главную страницу
-                        page.go('/')
-                        page.update()
-                    cur.close()
+                with open(json_path, 'w') as f:
+                    js.dump(data, f, indent=4)  # indent для красивого форматирования
+
+                # Очистка полей после успешной отправки
+                text_input_login.value = ""
+                text_input_password.value = ""
+                #Перенапровляем на главную страницу
+                page.go('/')
+                page.update()
+            cur.close()
+
         else:
-                    error_text.value = f"Error:{response}"
-                    error_text.visible = True
-                    error_text.update()
-                    
-        #except Exception as ex:
-         #   error_text.value = f"Ошибка соединения: {str(ex)}"
-         #   error_text.visible = True
-          #  error_text.update()
+            error_text.value = f"Error:{response}"
+            error_text.visible = True
+            error_text.update()
 
     # Элементы интерфейса
     label = ft.Text('Авторизация:', size=30)

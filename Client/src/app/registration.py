@@ -1,11 +1,11 @@
 import flet as ft
 import httpx as hx
 import json as js
+import requests as rq
 
 
 def main_registartion(page: ft.Page):
     page.title = "Регистрация"
-    #page.theme_mode = data["theme"]
     page.vertical_alignment = ft.MainAxisAlignment.CENTER
     page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
 
@@ -52,7 +52,7 @@ def main_registartion(page: ft.Page):
         data = {
             'login': text_input_login.value,
             'email': text_input_email.value,
-            'number':text_input_number,
+            'number':text_input_number.value,
             'password': text_input_password.value
         }
 
@@ -64,7 +64,7 @@ def main_registartion(page: ft.Page):
                     json=data
                 )
                 
-                if response.status_code == 200:
+            if response.status_code == 200:
                     # Очистка полей после успешной отправки
                     text_input_login.value = ""
                     text_input_email.value = ""
@@ -72,7 +72,7 @@ def main_registartion(page: ft.Page):
                     text_input_password_clon.value = ""
                     page.go('/login')
                     page.update()
-                else:
+            else:
                     error_text.value = f"Ошибка сервера: {response.text}"
                     error_text.visible = True
                     error_text.update()
@@ -151,11 +151,11 @@ def main_registartion(page: ft.Page):
                     alignment=ft.MainAxisAlignment.CENTER,
                     width=400
                 ),
-                expand=True,  # Растягиваем на весь доступный размер
-                alignment=ft.alignment.center  # Центрируем содержимое
+                expand=True,
+                alignment=ft.alignment.center
             )
         ],
-        # appbar=appbar,  # раскомментируйте если нужно
-        # navigation_bar=navigation_bar  # раскомментируйте если нужно
+        # appbar=appbar,
+        # navigation_bar=navigation_bar
     )
 

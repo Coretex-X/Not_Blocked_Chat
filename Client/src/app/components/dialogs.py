@@ -31,10 +31,9 @@
 import flet as ft
 
 def create_exit_dialog():
-    """Создает диалог подтверждения выхода"""
     return ft.AlertDialog(
         title=ft.Text("Подтверждение выхода"),
-        content=ft.Text("Вы уверены, что хотите выйти из приложения?"),
+        content=ft.Text("Вы уверены, что хотите выйти?"),
         actions=[
             ft.TextButton("Отмена", on_click=None),
             ft.TextButton("Да", on_click=None),
@@ -42,7 +41,6 @@ def create_exit_dialog():
     )
 
 def create_delete_chat_dialog():
-    """Создает диалог подтверждения удаления чата"""
     return ft.AlertDialog(
         title=ft.Text("Удаление чата"),
         content=ft.Text(""),
@@ -50,22 +48,26 @@ def create_delete_chat_dialog():
     )
 
 def create_contact_dialog():
-    """Создает диалог выбора контакта"""
-    contact_list = ft.Column(
-        scroll=ft.ScrollMode.ADAPTIVE,
-        spacing=2
+    """Диалог выбора контакта с полем поиска"""
+    search_field = ft.TextField(
+        label="Поиск пользователя",
+        prefix_icon=ft.Icons.SEARCH,
+        border_radius=20,
     )
-    
+
+    contact_list = ft.Column(scroll=ft.ScrollMode.ADAPTIVE, spacing=2)
+
     dialog = ft.AlertDialog(
         title=ft.Text("Выберите контакт для чата"),
         content=ft.Container(
-            content=contact_list,
+            content=ft.Column(
+                controls=[search_field, contact_list],
+                spacing=10,
+            ),
             width=450,
-            height=400,
+            height=450,
         ),
-        actions=[
-            ft.TextButton("Отмена", on_click=None)
-        ]
+        actions=[ft.TextButton("Отмена", on_click=None)]
     )
-    
-    return dialog, contact_list
+
+    return dialog, contact_list, search_field

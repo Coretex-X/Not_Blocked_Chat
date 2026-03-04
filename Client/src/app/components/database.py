@@ -31,24 +31,28 @@ import sqlite3 as sql
 from datetime import datetime
 
 def init_database(db_path):
-    """Инициализация базы данных и создание таблиц если их нет"""
     with sql.connect(db_path) as con:
         cur = con.cursor()
-        
-        # Таблица контактов
-        cur.execute('''
-            CREATE TABLE IF NOT EXISTS contacts (
-                user_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                id_user TEXT,
-                username TEXT NOT NULL,
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users_data(
+                id_user INTEGER,
+                name TEXT,
+                profile TEXT,
+                number TEXT,
                 token TEXT,
+                avatar TEXT
+            )""")
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS contacts(
+                user_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT,
                 status TEXT,
                 phone TEXT,
                 avatar TEXT
-            )
-        ''')
-        
-        # Таблица чатов
+            )""")
+
         cur.execute('''
             CREATE TABLE IF NOT EXISTS chats (
                 chat_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,62 +63,27 @@ def init_database(db_path):
                 unread_count INTEGER DEFAULT 0,
                 contact_id INTEGER,
                 FOREIGN KEY (contact_id) REFERENCES contacts (user_id)
-            )
-        ''')
-        
-        # Проверяем есть ли тестовые контакты
-        cur.execute("SELECT COUNT(*) FROM contacts")
-        if cur.fetchone()[0] == 0:
-            test_contacts = [
-                ('Алексей Петров', 'В сети', '+79123456789', None),
-                ('Мария Иванова', 'Был(а) недавно', '+79123456780', None),
-                ('Иван Сидоров', 'В сети', '+79123456781', None),
-                ('Елена Козлова', 'Не беспокоить', '+79123456782', None),
-                ('Дмитрий Волков', 'В сети', '+79123456783', None),
-            ]
-            cur.executemany('INSERT INTO contacts (username, status, phone, avatar) VALUES (?, ?, ?, ?)', test_contacts)
-            
-            test_chats = [
-                ('Алексей Петров', 'Привет! Как дела?', '2024-01-15 14:30:00', 2, 1),
-                ('Мария Иванова', 'Договорились на завтра', '2024-01-15 13:15:00', 0, 2),
-                ('Иван Сидоров', 'Файл отправлен', '2024-01-14 18:45:00', 1, 3),
-                ('Елена Козлова', 'Спасибо за помощь!', '2024-01-14 12:20:00', 0, 4),
-            ]
-            cur.executemany('''
-                INSERT INTO chats (chat_name, last_message, last_message_time, unread_count, contact_id) 
-                VALUES (?, ?, ?, ?, ?)
-            ''', test_chats)
-        
+            )''')
+
         con.commit()
 
 def load_contacts(db_path):
-    """Загрузка списка контактов из базы данных"""
     with sql.connect(db_path) as con:
         cur = con.cursor()
         cur.execute("SELECT user_id, username, status FROM contacts ORDER BY username")
-        contacts_data = cur.fetchall()
-        return [{"id": c[0], "username": c[1], "status": c[2]} for c in contacts_data]
+        return [{"id": c[0], "username": c[1], "status": c[2]} for c in cur.fetchall()]
 
 def load_chats(db_path):
-    """Загрузка списка чатов из базы данных"""
     with sql.connect(db_path) as con:
         cur = con.cursor()
         cur.execute('''
-            SELECT c.chat_id, c.chat_name, c.last_message, c.last_message_time, c.unread_count 
-            FROM chats c 
-            ORDER BY c.last_message_time DESC
+            SELECT chat_id, chat_name, last_message, last_message_time, unread_count 
+            FROM chats ORDER BY last_message_time DESC
         ''')
-        chats_data = cur.fetchall()
-        return [{
-            "id": c[0], 
-            "name": c[1], 
-            "last_message": c[2], 
-            "last_time": c[3], 
-            "unread": c[4]
-        } for c in chats_data]
+        return [{"id": c[0], "name": c[1], "last_message": c[2], "last_time": c[3], "unread": c[4]}
+                for c in cur.fetchall()]
 
 def delete_chat_from_db(db_path, chat_id):
-    """Удаление чата из базы данных"""
     with sql.connect(db_path) as con:
         cur = con.cursor()
         cur.execute('DELETE FROM chats WHERE chat_id = ?', (chat_id,))
@@ -122,30 +91,25 @@ def delete_chat_from_db(db_path, chat_id):
         return cur.rowcount > 0
 
 def create_new_chat(db_path, contact_id, contact_name):
-    """Создает новый чат с контактом и возвращает ID созданного чата"""
     with sql.connect(db_path) as con:
         cur = con.cursor()
-        
         cur.execute('SELECT chat_id FROM chats WHERE contact_id = ?', (contact_id,))
-        existing_chat = cur.fetchone()
-        
-        if existing_chat:
-            return existing_chat[0]
-        else:
-            cur.execute('''
-                INSERT INTO chats (chat_name, chat_type, last_message_time, contact_id) 
-                VALUES (?, 'private', ?, ?)
-            ''', (contact_name, datetime.now(), contact_id))
-            con.commit()
-            return cur.lastrowid
+        existing = cur.fetchone()
+        if existing:
+            return existing[0]
+        cur.execute('''
+            INSERT INTO chats (chat_name, chat_type, last_message_time, contact_id) 
+            VALUES (?, 'private', ?, ?)
+        ''', (contact_name, datetime.now(), contact_id))
+        con.commit()
+        return cur.lastrowid
 
 def get_user_data(db_path):
-    """Получение данных текущего пользователя"""
     with sql.connect(db_path) as con:
         cur = con.cursor()
         try:
             cur.execute("SELECT name, profile FROM users_data")
-            result = cur.fetchall()
-            return result[0] if result else ['None', 'None']
+            result = cur.fetchone()
+            return result if result else ('None', 'None')
         except sql.OperationalError:
-            return ['None', 'None']
+            return ('None', 'None')

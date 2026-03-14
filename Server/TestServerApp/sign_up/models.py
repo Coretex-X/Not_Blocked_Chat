@@ -10,7 +10,7 @@ class Models(models.Model):
     status = models.TextField()
     password = models.TextField()
     token = models.TextField(unique=True)
-    sessuon_token_id_consuner = models.TextField(unique=True)
+    #sessuon_token_id_consuner = models.TextField(unique=True)
 
     def check_password(self, raw_password):
         return check_password(raw_password, self.password)

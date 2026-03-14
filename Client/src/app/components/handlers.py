@@ -33,11 +33,17 @@
 import os
 from .database import load_chats, delete_chat_from_db, create_new_chat
 import flet as ft
+import sqlite3 as sql
 
 def setup_handlers(page, db_path, contacts, chats, update_chats_list_func, update_contacts_tab_func):
 
     def get_out(e):
-        os.remove(db_path)
+        with sql.connect(db_path) as con:
+            cur = con.cursor()
+            cur.execute("UPDATE user_settings SET authorization = 'false'")
+            cur.execute("DELETE FROM users_data")
+            #con.commit()
+            cur.close()
         page.go('/login')
         page.update()
 

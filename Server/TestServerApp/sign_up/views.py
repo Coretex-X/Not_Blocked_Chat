@@ -75,7 +75,8 @@ class LoginView(APIView):
                 'login': response_login,
                 'number':queryset_login.number,
                 'token':token,
-                'status':status.HTTP_200_OK
+                'profil':'Приветствую в NBC!',
+               'status': status.HTTP_200_OK
                 })
         
         #Если пороль не верный

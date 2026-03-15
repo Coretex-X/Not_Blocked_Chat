@@ -12,8 +12,9 @@ import base64
 import websocket
 import threading
 import queue
-import sqlite3
+import sqlite3 as sql
 import path  # ваш модуль с путями
+from .components.chat_meneger import get_chat_id
 
 
 db_path = f"{path.db_path()}user_data.db"
@@ -37,9 +38,15 @@ for folder in (INCOMING_FOLDER, ASSETS_FOLDER, VOICE_FOLDER):
     os.makedirs(folder, exist_ok=True)
 
 # ─────────────────────────── Данные пользователей ─────────────────────────────
-
-MY_ID      = "None"
-CONTACT_ID = "None"
+def db_user_data(id):
+    with sql.connect(db_path) as con:
+        cur_data = con.cursor()
+        cur_data.execute("SELECT * FROM contacts WHERE user_id = ?", (id,))
+        result = cur_data.fetchone()  
+        return result
+    
+MY_ID      = "1"
+CONTACT_ID = "2"
 
 CURRENT_USER = {
     "id": MY_ID,
@@ -50,15 +57,6 @@ CURRENT_USER = {
     "about": "None",
 }
 
-CONTACT_USER = {
-    "id": CONTACT_ID,
-    "name": "None",
-    "avatar_color": ft.Colors.GREY,
-    "phone": "None",
-    "status": "None",
-    "about": "None",
-    "last_seen": "None",
-}
 
 # ─────────────────────────── WebSocket ────────────────────────────────────────
 
@@ -69,16 +67,22 @@ running = True
 
 def authenticate():
     """Регистрирует чат-комнату на сервере."""
-    conn = websocket.WebSocket()
-    conn.connect(WS_URL_DATA)
-    conn.send(json.dumps({
-        "room": "None",
-        "user_id": MY_ID,
-        "guest_id": CONTACT_ID,
-        "status_chat": "existing_chat",
-        "token": "api87",
-    }))
-    conn.close()
+    try:
+        if MY_ID == "None" and CONTACT_ID == "None":
+            print("Данных нет")
+        else:
+            conn = websocket.WebSocket()
+            conn.connect(WS_URL_DATA)
+            conn.send(json.dumps({
+                "room": "lobbi",
+                "user_id": MY_ID,
+                "guest_id": CONTACT_ID,
+                "status_chat": "existing_chat",
+                "token": "api87",
+            }))
+            conn.close()
+    except:
+        pass
 
 
 def receive_messages():
@@ -119,10 +123,13 @@ def receive_messages():
 
 
 # Запускаем соединение и фоновый поток
-authenticate()
-ws = websocket.WebSocket()
-ws.connect(WS_URL_CHAT)
-threading.Thread(target=receive_messages, daemon=True).start()
+try:
+    authenticate()
+    ws = websocket.WebSocket()
+    ws.connect(WS_URL_CHAT)
+    threading.Thread(target=receive_messages, daemon=True).start()
+except:
+    pass
 
 
 # ─────────────────────────── Вспомогательные функции ──────────────────────────
@@ -161,6 +168,19 @@ def now_hm() -> str:
 
 def chat_view(page: ft.Page) -> ft.View:
     """Возвращает ft.View для маршрута /chat."""
+
+    chat_id = get_chat_id()  # Получаем через менеджер
+    result = db_user_data(chat_id)
+
+    CONTACT_USER = {
+        "id": CONTACT_ID,
+        "name": result[1],
+        "avatar_color": ft.Colors.GREY,
+        "phone": result[3],
+        "status": "",
+        "about": result[2],
+        "last_seen": "None",
+    }
 
     # Списки сообщений
     messages_column   = ft.Column(scroll=ft.ScrollMode.ALWAYS, expand=True)

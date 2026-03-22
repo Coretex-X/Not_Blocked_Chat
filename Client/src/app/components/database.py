@@ -113,3 +113,11 @@ def get_user_data(db_path):
             return result if result else ('None', 'None')
         except sql.OperationalError:
             return ('None', 'None')
+        
+def get_contact_id_by_chat(db_path, chat_id):
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+        cur.execute("SELECT contact_id FROM chats WHERE chat_id = ?", (chat_id,))
+        result = cur.fetchone()
+        return result[0] if result else None
+    

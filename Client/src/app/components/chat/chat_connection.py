@@ -7,12 +7,22 @@ import base64
 import threading
 import queue
 import websocket
+from .geniration_token import GuaranteedUniqueTokenGenerator
+
+# ─────────────────────────── Генирация Токена и Комнаты ───────────────────────
+
+geniration = GuaranteedUniqueTokenGenerator()
+token = geniration.generate_token(90)
+#token = '65'
+lobbi = geniration.generate_token(90)
 
 # ─────────────────────────── Константы ────────────────────────────────────────
 
 WS_URL_DATA    = "ws://127.0.0.1:5000/ws/data/"
-WS_URL_CHAT    = "ws://127.0.0.1:5000/ws/chat_user/api87/"
+WS_URL_CHAT    = f"ws://127.0.0.1:5000/ws/chat_user/{token}/"
+WS_URL_NEW_CHAT    = f"ws://127.0.0.1:5000/ws/new_chat_user/{token}/"
 FILE_SEPARATOR = b"|||BINARY_DATA|||"
+lobbi_time = "lobbi"
 
 # ─────────────────────────── Состояние соединения ─────────────────────────────
 
@@ -21,7 +31,7 @@ ws: websocket.WebSocket | None = None
 running = True
 
 
-def authenticate(my_id: str, contact_id: str):
+def authenticate(my_id: str, contact_id: str, status_chat: str):
     """Регистрирует чат-комнату на сервере."""
     try:
         if my_id == "None" and contact_id == "None":
@@ -30,11 +40,11 @@ def authenticate(my_id: str, contact_id: str):
             conn = websocket.WebSocket()
             conn.connect(WS_URL_DATA)
             conn.send(json.dumps({
-                "room":        "lobbi",
-                "user_id":     my_id,
-                "guest_id":    contact_id,
-                "status_chat": "existing_chat",
-                "token":       "api87",
+                "room":lobbi_time if status_chat == 'existing_chat' else lobbi,
+                "user_id":my_id,
+                "guest_id":contact_id,
+                "status_chat":status_chat,
+                "token": token,
             }))
             conn.close()
     except Exception:
@@ -78,13 +88,16 @@ def receive_messages():
             break
 
 
-def start_connection(my_id: str, contact_id: str):
+def start_connection(my_id: str, contact_id: str, status_chat: str):
     """Инициализирует аутентификацию, открывает WS и запускает фоновый поток."""
     global ws
     try:
-        authenticate(my_id, contact_id)
+        authenticate(my_id, contact_id, status_chat)
         ws = websocket.WebSocket()
-        ws.connect(WS_URL_CHAT)
+        if status_chat == 'new_chat':
+            ws.connect(WS_URL_NEW_CHAT)
+        else:
+            ws.connect(WS_URL_CHAT)
         threading.Thread(target=receive_messages, daemon=True).start()
     except Exception:
         pass

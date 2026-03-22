@@ -34,7 +34,7 @@ import os
 from .database import load_chats, delete_chat_from_db, create_new_chat
 import flet as ft
 import sqlite3 as sql
-from .chat.chat_meneger import set_chat_id
+from .chat.chat_meneger import set_chat_id, set_status_chat
 
 def setup_handlers(page, db_path, contacts, chats, update_chats_list_func, update_contacts_tab_func):
 
@@ -48,8 +48,10 @@ def setup_handlers(page, db_path, contacts, chats, update_chats_list_func, updat
         page.go('/login')
         page.update()
 
-    def open_existing_chat(chat_id):
-        chat_id-=1
+    def open_existing_chat(chat_id, status_chat=None):
+        if status_chat == None:
+            status_chat = 'existing_chat'
+        set_status_chat(status_chat)
         set_chat_id(chat_id)
         page.go('/chat')
 
@@ -113,8 +115,9 @@ def setup_handlers(page, db_path, contacts, chats, update_chats_list_func, updat
         chat_id = create_new_chat(db_path, contact_id, contact_name)
         update_chats_list_func()
         contact_dialog.open = False
+        status_chat = 'new_chat'
         page.update()
-        open_existing_chat_func(chat_id)
+        open_existing_chat_func(chat_id, status_chat)
 
     def close_dialog(e, dlg):
         dlg.open = False

@@ -121,6 +121,12 @@ def main_registartion(page: ft.Page):
         on_click= lambda _: page.go('/login')
     )
 
+    #Удаляем первые 1-2 символа по условию
+    if len(text_input_number) == 11:
+        text_input_number = text_input_number[1:]  # удаляем первый символ
+    elif len(text_input_number) == 12:
+        text_input_number = text_input_number[2:]  # удаляем первые два символа
+
     # Добавляем поля в список обязательных
     required_fields = [
         text_input_login,

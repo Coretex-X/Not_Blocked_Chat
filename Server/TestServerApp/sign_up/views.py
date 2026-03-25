@@ -21,7 +21,7 @@ class RegistrationView(APIView):
         class Validate(BaseModel):
             login:str = Field(min_length=3,max_length=40)
             email:EmailStr = Field(min_length=3,max_length=50)
-            number:str = Field(min_length=6, max_length=12)
+            number:str = Field(min_length=10, max_length=10)
             password:str = Field(min_length=4,max_length=40)
             model_config=ConfigDict(extra='forbid') 
         Validate(**request.data)
@@ -76,7 +76,7 @@ class LoginView(APIView):
                 'number':queryset_login.number,
                 'token':token,
                 'profil':'Приветствую в NBC!',
-               'status': status.HTTP_200_OK
+                'status': status.HTTP_200_OK
                 })
         
         #Если пороль не верный

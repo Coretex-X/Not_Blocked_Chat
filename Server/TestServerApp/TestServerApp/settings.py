@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'sign_up.apps.SignUpConfig',
     'chat.apps.ChatConfig',
+    'user_search.apps.UserSearchConfig',
 ]
 
 MIDDLEWARE = [

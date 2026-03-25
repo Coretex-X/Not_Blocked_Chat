@@ -30,6 +30,9 @@
 
 import flet as ft
 
+def number(e):
+    return e.value
+
 def create_exit_dialog():
     return ft.AlertDialog(
         title=ft.Text("Подтверждение выхода"),
@@ -55,6 +58,8 @@ def create_contact_dialog():
         border_radius=20,
     )
 
+    print(search_field.value)
+
     contact_list = ft.Column(scroll=ft.ScrollMode.ADAPTIVE, spacing=2)
 
     dialog = ft.AlertDialog(
@@ -69,5 +74,4 @@ def create_contact_dialog():
         ),
         actions=[ft.TextButton("Отмена", on_click=None)]
     )
-
     return dialog, contact_list, search_field

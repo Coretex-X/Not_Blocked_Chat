@@ -11,6 +11,13 @@ Chat_Test__
                 |    |           handlers.py
                 |    |           ui_components.py
                 |    |           utils.py
+                |    |           chat__
+                |    |                 |
+                |    |                 chat_connection.py
+                |    |                 chat_db.py
+                |    |                 chat_meneger.py
+                |    |                 chat_ui.py
+                |    |                 geniration_token.py
                 |    chat.py
                 |    menu.py
                 |    settings.py
@@ -32,7 +39,21 @@ Chat_Test__
                 |       |      user.png
                 |       |
                 |       avatars_user__
-                |                     |
+                |       |             |
+                |       |
+                |       |
+                |       data.media__
+                |                   |
+                |                    assets__
+                |                    |       |
+                |                    |
+                |                    incoming_files__
+                |                    |               |
+                |                    |
+                |                    voice_recordings__
+                |                                      |
+                |
+                | 
                 |
                 |
                 main.py

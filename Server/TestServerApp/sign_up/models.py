@@ -7,7 +7,7 @@ class Models(models.Model):
     login = models.CharField(max_length=225, unique=True)
     email = models.EmailField(unique=True)
     number = models.TextField()
-    status = models.TextField()
+    status = models.TextField(default='Приветствую в NBC!')
     password = models.TextField()
     token = models.TextField(unique=True)
     #sessuon_token_id_consuner = models.TextField(unique=True)

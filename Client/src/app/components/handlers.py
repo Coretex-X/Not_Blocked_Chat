@@ -34,7 +34,20 @@ import os
 from .database import load_chats, delete_chat_from_db, create_new_chat
 import flet as ft
 import sqlite3 as sql
-from .chat.chat_meneger import set_chat_id, set_status_chat
+import requests as http
+import threading
+import time
+from .chat.chat_meneger import set_chat_id, set_status_chat 
+
+def number_search_contact(number):
+    if len(number) == 11:
+        number = number[1:]  # удаляем первый символ
+    elif len(number) == 12:
+        number = number[2:]  # удаляем первые два символа
+    data = {"number": number}
+    response = http.post(f"http://127.0.0.1:5000/search/v2/user/search_contacts/", json=data)
+    data_user = response.json()
+    print(data_user)
 
 def setup_handlers(page, db_path, contacts, chats, update_chats_list_func, update_contacts_tab_func):
 
@@ -101,8 +114,13 @@ def setup_handlers(page, db_path, contacts, chats, update_chats_list_func, updat
                     )
             contact_list.update()
 
+        def on_search_submit(e):
+                number_search_contact(e.control.value)
+                render_contacts(e.control.value)
+
         search_field.value = ""
-        search_field.on_change = lambda e: render_contacts(e.control.value)
+        search_field.on_change = lambda e: render_contacts(e.control.value)  # фильтр работает как раньше
+        search_field.on_submit = on_search_submit  # печатает только когда нажали Enter
         render_contacts()
 
         contact_dialog.actions = [

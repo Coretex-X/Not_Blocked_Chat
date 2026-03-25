@@ -54,7 +54,9 @@ def main_menu(page):
 
     dlg = create_exit_dialog()
     confirm_dialog = create_delete_chat_dialog()
-    contact_dialog, contact_list, search_field = create_contact_dialog()
+
+    # Теперь получаем 5 значений из create_contact_dialog
+    contact_dialog, contact_list, search_field, loading_container, search_result_container = create_contact_dialog()
 
     chats_container = ft.Column(scroll=ft.ScrollMode.ADAPTIVE, spacing=2, expand=True)
     contacts_tab_content = ft.Column(scroll=ft.ScrollMode.ADAPTIVE, spacing=2, expand=True)
@@ -119,12 +121,17 @@ def main_menu(page):
     dlg.actions[0].on_click = lambda e: handlers['close_dialog'](e, dlg)
     dlg.actions[1].on_click = handlers['get_out']
 
-    new_chat_button.on_click = lambda e: handlers['show_contact_selection'](
-        e, contact_dialog, contact_list, search_field, contacts,
-        lambda cid, cname: handlers['create_chat_with_contact'](
-            cid, cname, update_chats_list, handlers['open_existing_chat'], contact_dialog
+    # Вспомогательная функция чтобы не дублировать аргументы
+    def open_new_chat_dialog(e):
+        handlers['show_contact_selection'](
+            e, contact_dialog, contact_list, search_field, contacts,
+            lambda cid, cname: handlers['create_chat_with_contact'](
+                cid, cname, update_chats_list, handlers['open_existing_chat'], contact_dialog
+            ),
+            loading_container, search_result_container
         )
-    )
+
+    new_chat_button.on_click = open_new_chat_dialog
 
     appbar = ft.AppBar(
         leading=ft.Image(src="image/not_blocked_chat.ico", width=10, height=10, fit=ft.ImageFit.CONTAIN),
@@ -152,12 +159,7 @@ def main_menu(page):
                 ft.PopupMenuItem(),
                 ft.PopupMenuItem(
                     content=ft.Row([ft.Icon(ft.Icons.CHAT, size=20), ft.Text('Новый чат')], spacing=10),
-                    on_click=lambda e: handlers['show_contact_selection'](
-                        e, contact_dialog, contact_list, search_field, contacts,
-                        lambda cid, cname: handlers['create_chat_with_contact'](
-                            cid, cname, update_chats_list, handlers['open_existing_chat'], contact_dialog
-                        )
-                    )
+                    on_click=open_new_chat_dialog,
                 ),
                 ft.PopupMenuItem(
                     content=ft.Row([ft.Icon(ft.Icons.GROUP_ADD, size=20), ft.Text('Новая группа')], spacing=10),

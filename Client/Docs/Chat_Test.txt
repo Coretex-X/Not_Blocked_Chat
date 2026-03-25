@@ -80,7 +80,9 @@ def main_menu(page):
 
     dlg = create_exit_dialog()
     confirm_dialog = create_delete_chat_dialog()
-    contact_dialog, contact_list, search_field = create_contact_dialog()
+
+    # Теперь получаем 5 значений из create_contact_dialog
+    contact_dialog, contact_list, search_field, loading_container, search_result_container = create_contact_dialog()
 
     chats_container = ft.Column(scroll=ft.ScrollMode.ADAPTIVE, spacing=2, expand=True)
     contacts_tab_content = ft.Column(scroll=ft.ScrollMode.ADAPTIVE, spacing=2, expand=True)
@@ -145,12 +147,17 @@ def main_menu(page):
     dlg.actions[0].on_click = lambda e: handlers['close_dialog'](e, dlg)
     dlg.actions[1].on_click = handlers['get_out']
 
-    new_chat_button.on_click = lambda e: handlers['show_contact_selection'](
-        e, contact_dialog, contact_list, search_field, contacts,
-        lambda cid, cname: handlers['create_chat_with_contact'](
-            cid, cname, update_chats_list, handlers['open_existing_chat'], contact_dialog
+    # Вспомогательная функция чтобы не дублировать аргументы
+    def open_new_chat_dialog(e):
+        handlers['show_contact_selection'](
+            e, contact_dialog, contact_list, search_field, contacts,
+            lambda cid, cname: handlers['create_chat_with_contact'](
+                cid, cname, update_chats_list, handlers['open_existing_chat'], contact_dialog
+            ),
+            loading_container, search_result_container
         )
-    )
+
+    new_chat_button.on_click = open_new_chat_dialog
 
     appbar = ft.AppBar(
         leading=ft.Image(src="image/not_blocked_chat.ico", width=10, height=10, fit=ft.ImageFit.CONTAIN),
@@ -178,12 +185,7 @@ def main_menu(page):
                 ft.PopupMenuItem(),
                 ft.PopupMenuItem(
                     content=ft.Row([ft.Icon(ft.Icons.CHAT, size=20), ft.Text('Новый чат')], spacing=10),
-                    on_click=lambda e: handlers['show_contact_selection'](
-                        e, contact_dialog, contact_list, search_field, contacts,
-                        lambda cid, cname: handlers['create_chat_with_contact'](
-                            cid, cname, update_chats_list, handlers['open_existing_chat'], contact_dialog
-                        )
-                    )
+                    on_click=open_new_chat_dialog,
                 ),
                 ft.PopupMenuItem(
                     content=ft.Row([ft.Icon(ft.Icons.GROUP_ADD, size=20), ft.Text('Новая группа')], spacing=10),
@@ -256,8 +258,136 @@ def main_menu(page):
 
 
 
+//app/chat.py
+import flet as ft
+from .components.chat.chat_meneger import get_chat_id, get_status_chat
+from .components.chat import chat_db as db
+from .components.chat import chat_connection as conn
+from .components.database import get_contact_id_by_chat
+from .components.chat.chat_ui import ChatUI
+import path
+# ─────────────────────────── Идентификаторы ───────────────────────────────────
 
-//app/components//dialogs.py
+MY_ID      = "1"
+CONTACT_ID = "2"
+
+
+
+# ─────────────────────────── Главная функция ──────────────────────────────────
+
+def chat_view(page: ft.Page) -> ft.View:
+    """Возвращает ft.View для маршрута /chat."""
+
+    # Получаем данные собеседника из БД
+    chat_id = get_chat_id()
+    status_chat = get_status_chat()
+    #result  = db.db_user_data(chat_id)
+
+    db_path = f"{path.db_path()}user_data.db"
+    contact_id = get_contact_id_by_chat(db_path, chat_id)  # получаем contact_id из chats
+    result = db.db_user_data(contact_id) if contact_id else None
+
+    # Защита от None
+    if result is None:
+        contact_name  = "Неизвестный"
+        contact_phone = "—"
+        contact_about = "—"
+    else:
+        contact_name  = result[1]
+        contact_phone = result[3]
+        contact_about = result[2]
+
+    contact_user = {
+        "id":           CONTACT_ID,
+        "name":         contact_name,
+        "avatar_color": ft.Colors.GREY,
+        "phone":        contact_phone,
+        "about":        contact_about,
+        "last_seen":    "None",
+    }
+
+    CURRENT_USER = {
+        "id":           MY_ID,
+        "name":         "None",
+        "avatar_color": ft.Colors.GREY,
+        "phone":        "None",
+        "status":       "None",
+        "about":        "None",
+    }
+    
+    # Запускаем WebSocket-соединение при загрузке модуля
+    conn.start_connection(MY_ID, CONTACT_ID, status_chat)
+
+    # Создаём объект UI (строит все виджеты внутри)
+    ui = ChatUI(page, CURRENT_USER, contact_user)
+
+    # Регистрируем FilePicker в overlay страницы
+    page.overlay.append(ui.file_picker)
+    page.update()
+
+    # Публикуем хуки для входящих сообщений (используются снаружи при необходимости)
+    page.data = {
+        "add_incoming_text": lambda text, sid=None: ui.add_message_to_chat(
+            ui.create_text_message(text, is_user=(sid == CURRENT_USER["id"]))),
+
+        "add_incoming_image": lambda path, name, sid=None, ot=False: ui.add_message_to_chat(
+            ui.create_image_message(path, name,
+                                    is_user=(sid == CURRENT_USER["id"]),
+                                    one_time_view=ot)),
+
+        "add_incoming_video": lambda path, name, sid=None: ui.add_message_to_chat(
+            ui.create_video_message(path, name,
+                                    is_user=(sid == CURRENT_USER["id"]))),
+
+        "add_incoming_audio": lambda path, name, sid=None: ui.add_message_to_chat(
+            ui.create_audio_message(path, name,
+                                    is_user=(sid == CURRENT_USER["id"]))),
+
+        "add_incoming_document": lambda path, name, sid=None, ftype="Файл": ui.add_message_to_chat(
+            ui.create_document_message(path, name, ftype,
+                                       is_user=(sid == CURRENT_USER["id"]))),
+    }
+
+    # Запускаем опрос очереди входящих сообщений
+    ui.poll_queue()
+
+    # ── Сборка страницы ────────────────────────────────────────────────────────
+    return ft.View(
+        "/chat",
+        controls=[
+            ft.Container(
+                expand=True,
+                content=ft.Column(
+                    [
+                        ui.chat_header,
+                        ft.Container(
+                            content=ui.messages_column,
+                            expand=True,
+                            padding=10,
+                            bgcolor=ft.Colors.GREY_100,
+                        ),
+                        ui.voice_panel,
+                        ui.input_bar,
+                    ],
+                    expand=True,
+                ),
+            )
+        ],
+        padding=0,
+        bgcolor=ft.Colors.WHITE,
+    )
+
+
+
+
+
+
+
+
+
+
+
+//app/components/dialogs.py
 import flet as ft
 
 def number(e):
@@ -283,12 +413,22 @@ def create_delete_chat_dialog():
 def create_contact_dialog():
     """Диалог выбора контакта с полем поиска"""
     search_field = ft.TextField(
-        label="Поиск пользователя",
+        label="Поиск пользователя по номеру",
         prefix_icon=ft.Icons.SEARCH,
         border_radius=20,
     )
 
-    print(search_field.value)
+    # Спиннер загрузки (скрыт по умолчанию)
+    loading_ring = ft.ProgressRing(width=32, height=32, stroke_width=3, visible=False)
+    loading_container = ft.Container(
+        content=loading_ring,
+        alignment=ft.alignment.center,
+        padding=ft.padding.symmetric(vertical=10),
+        visible=False,
+    )
+
+    # Контейнер результата поиска (скрыт по умолчанию)
+    search_result_container = ft.Container(visible=False)
 
     contact_list = ft.Column(scroll=ft.ScrollMode.ADAPTIVE, spacing=2)
 
@@ -296,7 +436,12 @@ def create_contact_dialog():
         title=ft.Text("Выберите контакт для чата"),
         content=ft.Container(
             content=ft.Column(
-                controls=[search_field, contact_list],
+                controls=[
+                    search_field,
+                    loading_container,
+                    search_result_container,
+                    contact_list,
+                ],
                 spacing=10,
             ),
             width=450,
@@ -304,31 +449,35 @@ def create_contact_dialog():
         ),
         actions=[ft.TextButton("Отмена", on_click=None)]
     )
-    return dialog, contact_list, search_field
-
-
-
-
-
+    return dialog, contact_list, search_field, loading_container, search_result_container
 
 
 //app/components/handlers.py
-mport os
+import os
+import threading
+import time
 from .database import load_chats, delete_chat_from_db, create_new_chat
 import flet as ft
 import sqlite3 as sql
 import requests as http
-from .chat.chat_meneger import set_chat_id, set_status_chat 
+from .chat.chat_meneger import set_chat_id, set_status_chat
+
 
 def number_search_contact(number):
     if len(number) == 11:
-        number = number[1:]  # удаляем первый символ
+        number = number[1:]
     elif len(number) == 12:
-        number = number[2:]  # удаляем первые два символа
+        number = number[2:]
     data = {"number": number}
-    response = http.post(f"http://127.0.0.1:5000/search/v2/user/search_contacts/", json=data)
-    data_user = response.json()
-    print(data_user)
+    try:
+        response = http.post(f"http://127.0.0.1:5000/search/v2/user/search_contacts/", json=data)
+        data_user = response.json()
+        print(data_user)
+        return data_user
+    except Exception as ex:
+        print(f"Ошибка поиска: {ex}")
+        return None
+
 
 def setup_handlers(page, db_path, contacts, chats, update_chats_list_func, update_contacts_tab_func):
 
@@ -337,7 +486,6 @@ def setup_handlers(page, db_path, contacts, chats, update_chats_list_func, updat
             cur = con.cursor()
             cur.execute("UPDATE user_settings SET authorization = 'false'")
             cur.execute("DELETE FROM users_data")
-            #con.commit()
             cur.close()
         page.go('/login')
         page.update()
@@ -376,32 +524,148 @@ def setup_handlers(page, db_path, contacts, chats, update_chats_list_func, updat
         dlg.open = True
         page.update()
 
-    def show_contact_selection(e, contact_dialog, contact_list, search_field, contacts, create_chat_with_contact_func):
+    def show_contact_selection(e, contact_dialog, contact_list, search_field, contacts,
+                               create_chat_with_contact_func,
+                               loading_container=None, search_result_container=None):
+
         def render_contacts(filter_text=""):
             contact_list.controls.clear()
-            filtered = [c for c in contacts if filter_text.lower() in c["username"].lower()] if filter_text else contacts
-            if not filtered:
-                contact_list.controls.append(
-                    ft.Container(content=ft.Text("Нет контактов", text_align=ft.TextAlign.CENTER), padding=20)
-                )
-            else:
-                for contact in filtered:
-                    from .ui_components import create_contact_item
+
+            if not filter_text:
+                search_result_container.content = None
+                search_result_container.visible = False
+                if not contacts:
                     contact_list.controls.append(
-                        create_contact_item(
-                            contact,
-                            lambda e, cid=contact["id"], cname=contact["username"]: create_chat_with_contact_func(cid, cname)
+                        ft.Container(
+                            content=ft.Text("Нет контактов", text_align=ft.TextAlign.CENTER),
+                            padding=20
                         )
                     )
-            contact_list.update()
+                else:
+                    for contact in contacts:
+                        from .ui_components import create_contact_item
+                        contact_list.controls.append(
+                            create_contact_item(
+                                contact,
+                                lambda e, cid=contact["id"], cname=contact["username"]: create_chat_with_contact_func(cid, cname)
+                            )
+                        )
+            else:
+                filtered = [c for c in contacts if filter_text.lower() in c["username"].lower()]
+                if not filtered:
+                    contact_list.controls.append(
+                        ft.Container(
+                            content=ft.Text("Нет контактов", text_align=ft.TextAlign.CENTER),
+                            padding=20
+                        )
+                    )
+                else:
+                    for contact in filtered:
+                        from .ui_components import create_contact_item
+                        contact_list.controls.append(
+                            create_contact_item(
+                                contact,
+                                lambda e, cid=contact["id"], cname=contact["username"]: create_chat_with_contact_func(cid, cname)
+                            )
+                        )
+
+            page.update()
+
+        def format_number(number):
+            n = str(number).strip()
+            # Убираем всё кроме цифр
+            digits = ''.join(filter(str.isdigit, n))
+            # Приводим к 10 цифрам (без кода страны)
+            if len(digits) == 11:
+                digits = digits[1:]
+            if len(digits) == 10:
+                return f"+7 ({digits[0:3]}) {digits[3:6]}-{digits[6:8]}-{digits[8:10]}"
+            return number  # если формат неизвестный — возвращаем как есть
+
+        def show_search_result(data_user):
+            # *** ИСПРАВЛЕНИЕ: сервер возвращает 'post': 200, а не 'status': 200 ***
+            if data_user and data_user.get("post") == 200:
+
+                def open_found_chat(e):
+                    create_chat_with_contact_func(
+                        data_user.get("id"),
+                        data_user.get("login")
+                    )
+
+                card = ft.Container(
+                    content=ft.ListTile(
+                        leading=ft.Container(
+                            content=ft.Icon(ft.Icons.PERSON, size=22, color=ft.Colors.WHITE),
+                            width=50, height=50, border_radius=25,
+                            bgcolor=ft.Colors.GREEN, alignment=ft.alignment.center,
+                        ),
+                        title=ft.Text(
+                            data_user.get("login", ""),
+                            weight=ft.FontWeight.BOLD,
+                            size=16,
+                            overflow=ft.TextOverflow.ELLIPSIS,
+                            max_lines=1,
+                        ),
+                        subtitle=ft.Text(
+                            format_number(data_user.get("number", "")),
+                            size=14,
+                            color=ft.Colors.GREY,
+                            overflow=ft.TextOverflow.ELLIPSIS,
+                            max_lines=1,
+                        ),
+                        trailing=ft.Icon(ft.Icons.CHAT, color=ft.Colors.BLUE),
+                        on_click=open_found_chat,
+                    ),
+                    padding=ft.padding.symmetric(horizontal=5, vertical=2),
+                    border_radius=10,
+                    on_click=open_found_chat,
+                )
+
+                search_result_container.content = card
+
+            else:
+                search_result_container.content = ft.Container(
+                    content=ft.Row(
+                        controls=[
+                            ft.Icon(ft.Icons.PERSON_OFF, color=ft.Colors.GREY_500, size=22),
+                            ft.Text("Пользователь не найден :(", color=ft.Colors.GREY_500, size=14),
+                        ],
+                        spacing=8,
+                    ),
+                    padding=ft.padding.symmetric(horizontal=14, vertical=10),
+                )
+
+            search_result_container.visible = True
+            page.update()
+
+        def on_search_change(e):
+            value = e.control.value.strip()
+            render_contacts(value)
 
         def on_search_submit(e):
-                number_search_contact(e.control.value)
-                render_contacts(e.control.value)
+            value = e.control.value.strip()
+            if not value:
+                return
+
+            contact_list.controls.clear()
+            search_result_container.content = None
+            search_result_container.visible = False
+
+            loading_container.visible = True
+            loading_container.content.visible = True
+            page.update()
+
+            def do_search():
+                time.sleep(1)
+                result = number_search_contact(value)
+                loading_container.visible = False
+                show_search_result(result)
+
+            threading.Thread(target=do_search, daemon=True).start()
 
         search_field.value = ""
-        search_field.on_change = lambda e: render_contacts(e.control.value)  # фильтр работает как раньше
-        search_field.on_submit = on_search_submit  # печатает только когда нажали Enter
+        search_field.on_change = on_search_change
+        search_field.on_submit = on_search_submit
         render_contacts()
 
         contact_dialog.actions = [
@@ -438,3 +702,319 @@ def setup_handlers(page, db_path, contacts, chats, update_chats_list_func, updat
         'close_dialog': close_dialog,
         'open_dialog': open_dialog
     }
+
+
+
+
+
+//app/components/database.py
+import sqlite3 as sql
+from datetime import datetime
+
+def init_database(db_path):
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users_data(
+                id_user INTEGER,
+                name TEXT,
+                profile TEXT,
+                number TEXT,
+                token TEXT,
+                avatar TEXT
+            )""")
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS contacts(
+                user_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT,
+                status TEXT,
+                phone TEXT,
+                avatar TEXT
+            )""")
+
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS chats (
+                chat_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_name TEXT NOT NULL,
+                chat_type TEXT DEFAULT 'private',
+                last_message TEXT,
+                last_message_time DATETIME,
+                unread_count INTEGER DEFAULT 0,
+                contact_id INTEGER,
+                FOREIGN KEY (contact_id) REFERENCES contacts (user_id)
+            )''')
+
+        con.commit()
+
+def load_contacts(db_path):
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+        cur.execute("SELECT user_id, username, status FROM contacts ORDER BY username")
+        return [{"id": c[0], "username": c[1], "status": c[2]} for c in cur.fetchall()]
+
+def load_chats(db_path):
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+        cur.execute('''
+            SELECT chat_id, chat_name, last_message, last_message_time, unread_count 
+            FROM chats ORDER BY last_message_time DESC
+        ''')
+        return [{"id": c[0], "name": c[1], "last_message": c[2], "last_time": c[3], "unread": c[4]}
+                for c in cur.fetchall()]
+
+def delete_chat_from_db(db_path, chat_id):
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+        cur.execute('DELETE FROM chats WHERE chat_id = ?', (chat_id,))
+        con.commit()
+        return cur.rowcount > 0
+
+def create_new_chat(db_path, contact_id, contact_name):
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+        cur.execute('SELECT chat_id FROM chats WHERE contact_id = ?', (contact_id,))
+        existing = cur.fetchone()
+        if existing:
+            return existing[0]
+        cur.execute('''
+            INSERT INTO chats (chat_name, chat_type, last_message_time, contact_id) 
+            VALUES (?, 'private', ?, ?)
+        ''', (contact_name, datetime.now(), contact_id))
+        con.commit()
+        return cur.lastrowid
+
+def get_user_data(db_path):
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+        try:
+            cur.execute("SELECT name, profile FROM users_data")
+            result = cur.fetchone()
+            return result if result else ('None', 'None')
+        except sql.OperationalError:
+            return ('None', 'None')
+        
+def get_contact_id_by_chat(db_path, chat_id):
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+        cur.execute("SELECT contact_id FROM chats WHERE chat_id = ?", (chat_id,))
+        result = cur.fetchone()
+        return result[0] if result else None
+    
+
+
+
+
+
+
+И нафсякий случий
+//app/components/ui_components.py
+import flet as ft
+from .utils import get_avatar_letter, format_chat_time
+
+def create_contact_item(contact, on_click_handler):
+    avatar_letter = get_avatar_letter(contact["username"])
+    return ft.Container(
+        content=ft.ListTile(
+            leading=ft.Container(
+                content=ft.Text(avatar_letter, size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
+                width=50, height=50, border_radius=25,
+                bgcolor=ft.Colors.GREEN, alignment=ft.alignment.center,
+            ),
+            title=ft.Text(contact["username"], weight=ft.FontWeight.BOLD, size=16,
+                          overflow=ft.TextOverflow.ELLIPSIS, max_lines=1),
+            subtitle=ft.Text(contact.get("status", ""), size=14, color=ft.Colors.GREY,
+                             overflow=ft.TextOverflow.ELLIPSIS, max_lines=1),
+            trailing=ft.Icon(ft.Icons.CHAT, color=ft.Colors.BLUE),
+            on_click=on_click_handler,
+        ),
+        padding=ft.padding.symmetric(horizontal=5, vertical=2),
+        border_radius=10,
+        on_click=on_click_handler,
+    )
+
+def create_chat_item(chat, on_click_handler, on_delete_handler=None):
+    avatar_letter = get_avatar_letter(chat["name"])
+
+    def on_long_press(e):
+        if on_delete_handler:
+            on_delete_handler(chat["id"])
+
+    return ft.Container(
+        content=ft.ListTile(
+            leading=ft.Container(
+                content=ft.Text(avatar_letter, size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
+                width=50, height=50, border_radius=25,
+                bgcolor=ft.Colors.BLUE, alignment=ft.alignment.center,
+            ),
+            title=ft.Text(chat["name"], weight=ft.FontWeight.BOLD, size=16,
+                          overflow=ft.TextOverflow.ELLIPSIS, max_lines=1),
+            subtitle=ft.Text(chat["last_message"] or "Нет сообщений", size=14, color=ft.Colors.GREY,
+                             overflow=ft.TextOverflow.ELLIPSIS, max_lines=1),
+            trailing=ft.Column(
+                controls=[
+                    ft.Text(format_chat_time(chat["last_time"]), size=12, color=ft.Colors.GREY),
+                    ft.Container(
+                        content=ft.Text(str(chat["unread"]), color=ft.Colors.WHITE, size=12,
+                                        weight=ft.FontWeight.BOLD),
+                        bgcolor=ft.Colors.GREEN, border_radius=20, padding=ft.padding.all(6),
+                    ) if chat["unread"] > 0 else ft.Container(width=0, height=0)
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.END,
+                spacing=5,
+            ),
+            on_click=lambda e: on_click_handler(chat["id"]),
+        ),
+        padding=ft.padding.symmetric(horizontal=5, vertical=2),
+        border_radius=10,
+        on_long_press=on_long_press,
+    )
+
+
+
+
+
+
+//app/components/chat/chat_connection.py
+import json
+import base64
+import threading
+import queue
+import websocket
+from .geniration_token import GuaranteedUniqueTokenGenerator
+
+# ─────────────────────────── Генирация Токена и Комнаты ───────────────────────
+
+geniration = GuaranteedUniqueTokenGenerator()
+token = geniration.generate_token(90)
+#token = '65'
+lobbi = geniration.generate_token(90)
+
+# ─────────────────────────── Константы ────────────────────────────────────────
+
+WS_URL_DATA    = "ws://127.0.0.1:5000/ws/data/"
+WS_URL_CHAT    = f"ws://127.0.0.1:5000/ws/chat_user/{token}/"
+WS_URL_NEW_CHAT    = f"ws://127.0.0.1:5000/ws/new_chat_user/{token}/"
+FILE_SEPARATOR = b"|||BINARY_DATA|||"
+lobbi_time = "lobbi"
+
+# ─────────────────────────── Состояние соединения ─────────────────────────────
+
+message_queue: queue.Queue = queue.Queue()
+ws: websocket.WebSocket | None = None
+running = True
+
+
+def authenticate(my_id: str, contact_id: str, status_chat: str):
+    """Регистрирует чат-комнату на сервере."""
+    try:
+        if my_id == "None" and contact_id == "None":
+            print("Данных нет")
+        else:
+            conn = websocket.WebSocket()
+            conn.connect(WS_URL_DATA)
+            conn.send(json.dumps({
+                "room":lobbi_time if status_chat == 'existing_chat' else lobbi,
+                "user_id":my_id,
+                "guest_id":contact_id,
+                "status_chat":status_chat,
+                "token": token,
+            }))
+            conn.close()
+    except Exception:
+        pass
+
+
+def receive_messages():
+    """Фоновый поток: читает сообщения из WebSocket и кладёт в очередь."""
+    global running
+    while running:
+        try:
+            raw = ws.recv()
+
+            # Текстовые данные — JSON-сообщение
+            if isinstance(raw, str):
+                message_queue.put(json.loads(raw))
+
+            # Бинарные данные — файл: метаданные + разделитель + байты файла
+            elif isinstance(raw, bytes):
+                sep_pos = raw.find(FILE_SEPARATOR)
+                if sep_pos == -1:
+                    print("❌ Не найден разделитель в бинарных данных")
+                    continue
+                metadata   = json.loads(raw[:sep_pos].decode("utf-8"))
+                file_bytes = raw[sep_pos + len(FILE_SEPARATOR):]
+                message_queue.put({
+                    "type":      "file",
+                    "file_name": metadata.get("file_name", "unknown"),
+                    "file_type": metadata.get("file_type", "unknown"),
+                    "file_size": metadata.get("file_size", len(file_bytes)),
+                    "file_data": base64.b64encode(file_bytes).decode("utf-8"),
+                    "sender_id": metadata.get("sender_id"),
+                })
+        except websocket.WebSocketConnectionClosedException:
+            print("❌ WebSocket соединение закрыто")
+            break
+        except Exception as e:
+            import traceback
+            print(f"❌ Ошибка получения сообщения: {e}")
+            traceback.print_exc()
+            break
+
+
+def start_connection(my_id: str, contact_id: str, status_chat: str):
+    """Инициализирует аутентификацию, открывает WS и запускает фоновый поток."""
+    global ws
+    try:
+        authenticate(my_id, contact_id, status_chat)
+        ws = websocket.WebSocket()
+        if status_chat == 'new_chat':
+            ws.connect(WS_URL_NEW_CHAT)
+        else:
+            ws.connect(WS_URL_CHAT)
+        threading.Thread(target=receive_messages, daemon=True).start()
+    except Exception:
+        pass
+
+
+def send_text(payload: dict):
+    """Отправляет JSON-сообщение через WebSocket."""
+    if ws:
+        ws.send(json.dumps(payload))
+
+
+def send_binary(data: bytes):
+    """Отправляет бинарные данные через WebSocket."""
+    if ws:
+        ws.send_binary(data)
+
+
+
+
+
+
+
+
+////app/components/chat/chat_meneger.py
+# chat_manager.py
+_chat_id = None
+def set_chat_id(value):
+    global _chat_id
+    _chat_id = value
+    return _chat_id
+
+def get_chat_id():
+    global _chat_id
+    return _chat_id
+
+
+_status_chat = None
+def set_status_chat(value):
+    global _status_chat
+    _status_chat = value
+    return _status_chat
+
+def get_status_chat():
+    global _status_chat
+    return _status_chat

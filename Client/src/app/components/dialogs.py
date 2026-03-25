@@ -53,12 +53,22 @@ def create_delete_chat_dialog():
 def create_contact_dialog():
     """Диалог выбора контакта с полем поиска"""
     search_field = ft.TextField(
-        label="Поиск пользователя",
+        label="Поиск пользователя по номеру",
         prefix_icon=ft.Icons.SEARCH,
         border_radius=20,
     )
 
-    print(search_field.value)
+    # Спиннер загрузки (скрыт по умолчанию)
+    loading_ring = ft.ProgressRing(width=32, height=32, stroke_width=3, visible=False)
+    loading_container = ft.Container(
+        content=loading_ring,
+        alignment=ft.alignment.center,
+        padding=ft.padding.symmetric(vertical=10),
+        visible=False,
+    )
+
+    # Контейнер результата поиска (скрыт по умолчанию)
+    search_result_container = ft.Container(visible=False)
 
     contact_list = ft.Column(scroll=ft.ScrollMode.ADAPTIVE, spacing=2)
 
@@ -66,7 +76,12 @@ def create_contact_dialog():
         title=ft.Text("Выберите контакт для чата"),
         content=ft.Container(
             content=ft.Column(
-                controls=[search_field, contact_list],
+                controls=[
+                    search_field,
+                    loading_container,
+                    search_result_container,
+                    contact_list,
+                ],
                 spacing=10,
             ),
             width=450,
@@ -74,4 +89,4 @@ def create_contact_dialog():
         ),
         actions=[ft.TextButton("Отмена", on_click=None)]
     )
-    return dialog, contact_list, search_field
+    return dialog, contact_list, search_field, loading_container, search_result_container

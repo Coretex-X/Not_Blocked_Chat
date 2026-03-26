@@ -15,3 +15,10 @@ def db_user_data(id):
         cur_data.execute("SELECT * FROM contacts WHERE user_id = ?", (id,))
         result = cur_data.fetchone()
         return result
+    
+def db_user():
+    with sql.connect(db_path) as con:
+        cur_data = con.cursor()
+        cur_data.execute("SELECT id_user FROM users_data")
+        result = cur_data.fetchone()
+        return result

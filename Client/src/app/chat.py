@@ -17,11 +17,6 @@ from .components.chat.chat_ui import ChatUI
 import path
 # ─────────────────────────── Идентификаторы ───────────────────────────────────
 
-MY_ID      = "1"
-CONTACT_ID = "2"
-
-
-
 # ─────────────────────────── Главная функция ──────────────────────────────────
 
 def chat_view(page: ft.Page) -> ft.View:
@@ -34,6 +29,8 @@ def chat_view(page: ft.Page) -> ft.View:
 
     db_path = f"{path.db_path()}user_data.db"
     contact_id = get_contact_id_by_chat(db_path, chat_id)  # получаем contact_id из chats
+    my_id = db.db_user()  # получаем my_id из users_data
+    my_id = my_id[0]
     result = db.db_user_data(contact_id) if contact_id else None
 
     # Защита от None
@@ -47,7 +44,7 @@ def chat_view(page: ft.Page) -> ft.View:
         contact_about = result[2]
 
     contact_user = {
-        "id":           CONTACT_ID,
+        "id":           contact_id,
         "name":         contact_name,
         "avatar_color": ft.Colors.GREY,
         "phone":        contact_phone,
@@ -56,7 +53,7 @@ def chat_view(page: ft.Page) -> ft.View:
     }
 
     CURRENT_USER = {
-        "id":           MY_ID,
+        "id":           my_id,
         "name":         "None",
         "avatar_color": ft.Colors.GREY,
         "phone":        "None",
@@ -65,7 +62,7 @@ def chat_view(page: ft.Page) -> ft.View:
     }
     
     # Запускаем WebSocket-соединение при загрузке модуля
-    conn.start_connection(MY_ID, CONTACT_ID, status_chat)
+    conn.start_connection(my_id, contact_id, status_chat)
 
     # Создаём объект UI (строит все виджеты внутри)
     ui = ChatUI(page, CURRENT_USER, contact_user)

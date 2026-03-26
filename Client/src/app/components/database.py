@@ -50,6 +50,7 @@ def init_database(db_path):
                 username TEXT,
                 status TEXT,
                 phone TEXT,
+                status_user TEXT,
                 avatar TEXT
             )""")
 
@@ -64,7 +65,7 @@ def init_database(db_path):
                 contact_id INTEGER,
                 FOREIGN KEY (contact_id) REFERENCES contacts (user_id)
             )''')
-
+        
         con.commit()
 
 def load_contacts(db_path):

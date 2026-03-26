@@ -92,13 +92,14 @@ def start_connection(my_id: str, contact_id: str, status_chat: str):
     """Инициализирует аутентификацию, открывает WS и запускает фоновый поток."""
     global ws
     try:
-        authenticate(my_id, contact_id, status_chat)
+        '''authenticate(my_id, contact_id, status_chat)
         ws = websocket.WebSocket()
         if status_chat == 'new_chat':
             ws.connect(WS_URL_NEW_CHAT)
         else:
             ws.connect(WS_URL_CHAT)
-        threading.Thread(target=receive_messages, daemon=True).start()
+        threading.Thread(target=receive_messages, daemon=True).start()'''
+        print(f"Соединение установлено (симуляция)")
     except Exception:
         pass
 

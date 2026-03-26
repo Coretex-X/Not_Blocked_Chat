@@ -49,7 +49,6 @@ def number_search_contact(number):
     try:
         response = http.post(f"http://127.0.0.1:5000/search/v2/user/search_contacts/", json=data)
         data_user = response.json()
-        print(data_user)
         return data_user
     except Exception as ex:
         print(f"Ошибка поиска: {ex}")

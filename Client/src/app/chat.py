@@ -12,35 +12,46 @@ import flet as ft
 from .components.chat.chat_meneger import get_chat_id, get_status_chat
 from .components.chat import chat_db as db
 from .components.chat import chat_connection as conn
-from .components.database import get_contact_id_by_chat
+from .components.database import get_contact_id_by_chat, get_contact_display_name
 from .components.chat.chat_ui import ChatUI
 import path
-# ─────────────────────────── Идентификаторы ───────────────────────────────────
 
-# ─────────────────────────── Главная функция ──────────────────────────────────
+def format_phone_number(phone):
+    phone_str = str(phone)
+
+    if len(phone_str) == 11:
+        phone_str = phone_str[1:]  # удаляем первый символ
+    elif len(phone_str) == 12:
+        phone_str = phone_str[2:]  # удаляем первые два символа
+
+    if len(phone_str) == 10 and phone_str.isdigit():
+        formatted = f"+7 ({phone_str[0:3]}){phone_str[3:6]}-{phone_str[6:8]}-{phone_str[8:10]}"
+        return formatted
+    else:
+        return "Ошибка: номер должен содержать 10 цифр"
+
 
 def chat_view(page: ft.Page) -> ft.View:
     """Возвращает ft.View для маршрута /chat."""
 
-    # Получаем данные собеседника из БД
     chat_id = get_chat_id()
     status_chat = get_status_chat()
-    #result  = db.db_user_data(chat_id)
 
     db_path = f"{path.db_path()}user_data.db"
-    contact_id = get_contact_id_by_chat(db_path, chat_id)  # получаем contact_id из chats
-    my_id = db.db_user()  # получаем my_id из users_data
+    contact_id = get_contact_id_by_chat(db_path, chat_id)
+    my_id = db.db_user()
     my_id = my_id[0]
     result = db.db_user_data(contact_id) if contact_id else None
 
-    # Защита от None
     if result is None:
         contact_name  = "Неизвестный"
         contact_phone = "—"
         contact_about = "—"
     else:
-        contact_name  = result[1]
-        contact_phone = result[3]
+        # get_contact_display_name возвращает номер телефона в формате +7 (XXX) XXX-XX-XX
+        # если контакт помечен как not_save_user, иначе — обычное имя
+        contact_name  = get_contact_display_name(db_path, contact_id)
+        contact_phone = format_phone_number(result[3])
         contact_about = result[2]
 
     contact_user = {
@@ -60,18 +71,14 @@ def chat_view(page: ft.Page) -> ft.View:
         "status":       "None",
         "about":        "None",
     }
-    
-    # Запускаем WebSocket-соединение при загрузке модуля
+
     conn.start_connection(my_id, contact_id, status_chat)
 
-    # Создаём объект UI (строит все виджеты внутри)
     ui = ChatUI(page, CURRENT_USER, contact_user)
 
-    # Регистрируем FilePicker в overlay страницы
     page.overlay.append(ui.file_picker)
     page.update()
 
-    # Публикуем хуки для входящих сообщений (используются снаружи при необходимости)
     page.data = {
         "add_incoming_text": lambda text, sid=None: ui.add_message_to_chat(
             ui.create_text_message(text, is_user=(sid == CURRENT_USER["id"]))),
@@ -94,10 +101,8 @@ def chat_view(page: ft.Page) -> ft.View:
                                        is_user=(sid == CURRENT_USER["id"]))),
     }
 
-    # Запускаем опрос очереди входящих сообщений
     ui.poll_queue()
 
-    # ── Сборка страницы ────────────────────────────────────────────────────────
     return ft.View(
         "/chat",
         controls=[

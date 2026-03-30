@@ -29,11 +29,13 @@
 # - Реализуйте обработку клавиатурных сочетаний
 # - Добавьте обработчики drag & drop
 ##############################################################################
-
 import os
 import threading
 import time
-from .database import load_chats, delete_chat_from_db, create_new_chat
+from .database import (
+    load_chats, delete_chat_from_db, create_new_chat, save_contact_if_not_exists,
+    toggle_chat_favorite, is_chat_favorite, delete_user_and_contacts
+)
 import flet as ft
 import sqlite3 as sql
 import requests as http
@@ -55,19 +57,28 @@ def number_search_contact(number):
         return None
 
 
+def _format_phone(number):
+    """Форматирует номер в вид +7 (XXX) XXX-XX-XX"""
+    if not number:
+        return ""
+    digits = ''.join(filter(str.isdigit, str(number)))
+    if len(digits) == 11:
+        digits = digits[1:]
+    if len(digits) == 10:
+        return f"+7 ({digits[0:3]}) {digits[3:6]}-{digits[6:8]}-{digits[8:10]}"
+    return str(number)
+
+
 def setup_handlers(page, db_path, contacts, chats, update_chats_list_func, update_contacts_tab_func):
 
+    # ─── ВЫХОД: удаляем пользователя + все контакты ───────────────────────────
     def get_out(e):
-        with sql.connect(db_path) as con:
-            cur = con.cursor()
-            cur.execute("UPDATE user_settings SET authorization = 'false'")
-            cur.execute("DELETE FROM users_data")
-            cur.close()
+        delete_user_and_contacts(db_path)
         page.go('/login')
         page.update()
 
     def open_existing_chat(chat_id, status_chat=None):
-        if status_chat == None:
+        if status_chat is None:
             status_chat = 'existing_chat'
         set_status_chat(status_chat)
         set_chat_id(chat_id)
@@ -90,6 +101,59 @@ def setup_handlers(page, db_path, contacts, chats, update_chats_list_func, updat
             confirm_dialog.open = False
             page.update()
 
+    # ─── ИЗБРАННОЕ ─────────────────────────────────────────────────────────────
+    def handle_toggle_favorite(chat_id, context_menu_dialog, update_fn):
+        """Добавляет/убирает чат из избранного и обновляет списки."""
+        toggle_chat_favorite(db_path, chat_id)
+        context_menu_dialog.open = False
+        update_fn()
+        page.update()
+
+    # ─── КОНТЕКСТНОЕ МЕНЮ ЧАТА (долгое нажатие) ───────────────────────────────
+    def show_chat_context_menu(chat_id, chat_name, update_fn):
+        """
+        Показывает всплывающее окно при долгом нажатии на чат.
+        Содержит: Добавить/Убрать из избранного + Удалить.
+        """
+        favorite = is_chat_favorite(db_path, chat_id)
+        favorite_label = "Убрать из избранного" if favorite else "Добавить в избранное"
+        favorite_icon = ft.Icons.STAR_OUTLINE if favorite else ft.Icons.STAR
+
+        context_dialog = ft.AlertDialog(
+            title=ft.Text(chat_name, overflow=ft.TextOverflow.ELLIPSIS, max_lines=1),
+            content=None,
+            actions=[
+                ft.TextButton(
+                    content=ft.Row([
+                        ft.Icon(favorite_icon, color=ft.Colors.AMBER),
+                        ft.Text(favorite_label),
+                    ], spacing=8),
+                    on_click=lambda e: handle_toggle_favorite(chat_id, context_dialog, update_fn),
+                ),
+                ft.TextButton(
+                    content=ft.Row([
+                        ft.Icon(ft.Icons.DELETE_OUTLINE, color=ft.Colors.RED),
+                        ft.Text("Удалить чат", color=ft.Colors.RED),
+                    ], spacing=8),
+                    on_click=lambda e: _delete_from_context(chat_id, context_dialog, update_fn),
+                ),
+                ft.TextButton(
+                    "Отмена",
+                    on_click=lambda e: setattr(context_dialog, 'open', False) or page.update()
+                ),
+            ],
+        )
+        page.dialog = context_dialog
+        context_dialog.open = True
+        page.update()
+
+    def _delete_from_context(chat_id, context_dialog, update_fn):
+        context_dialog.open = False
+        page.update()
+        delete_chat_from_db(db_path, chat_id)
+        update_fn()
+        page.update()
+
     def soon_popup(e):
         dlg = ft.AlertDialog(
             title=ft.Text("Скоро"),
@@ -107,62 +171,88 @@ def setup_handlers(page, db_path, contacts, chats, update_chats_list_func, updat
         def render_contacts(filter_text=""):
             contact_list.controls.clear()
 
-            if not filter_text:
-                search_result_container.content = None
-                search_result_container.visible = False
-                if not contacts:
-                    contact_list.controls.append(
-                        ft.Container(
-                            content=ft.Text("Нет контактов", text_align=ft.TextAlign.CENTER),
-                            padding=20
-                        )
+            # ─── Разделяем контакты на сохранённые и несохранённые ────────────
+            saved = [c for c in contacts if c.get("status_user_contact") == "save_user"]
+            not_saved = [c for c in contacts if c.get("status_user_contact") == "not_save_user"]
+            # Контакты без явного статуса считаем сохранёнными
+            unknown = [c for c in contacts if c.get("status_user_contact") not in ("save_user", "not_save_user")]
+            saved = saved + unknown
+
+            if filter_text:
+                saved = [c for c in saved if filter_text.lower() in c["username"].lower()]
+                not_saved_filtered = []
+                for c in not_saved:
+                    phone_fmt = _format_phone(c.get("phone", ""))
+                    if filter_text.lower() in c["username"].lower() or filter_text in phone_fmt:
+                        not_saved_filtered.append(c)
+                not_saved = not_saved_filtered
+
+            if not saved and not not_saved:
+                contact_list.controls.append(
+                    ft.Container(
+                        content=ft.Text("Нет контактов", text_align=ft.TextAlign.CENTER),
+                        padding=20
                     )
-                else:
-                    for contact in contacts:
-                        from .ui_components import create_contact_item
-                        contact_list.controls.append(
-                            create_contact_item(
-                                contact,
-                                lambda e, cid=contact["id"], cname=contact["username"]: create_chat_with_contact_func(cid, cname)
-                            )
-                        )
+                )
             else:
-                filtered = [c for c in contacts if filter_text.lower() in c["username"].lower()]
-                if not filtered:
+                # ── Раздел «Сохранённые» ──
+                if saved:
                     contact_list.controls.append(
                         ft.Container(
-                            content=ft.Text("Нет контактов", text_align=ft.TextAlign.CENTER),
-                            padding=20
+                            content=ft.Text("Сохранённые", size=13, weight=ft.FontWeight.BOLD,
+                                            color=ft.Colors.GREY_600),
+                            padding=ft.padding.only(left=10, top=8, bottom=4),
                         )
                     )
-                else:
-                    for contact in filtered:
+                    for contact in saved:
                         from .ui_components import create_contact_item
                         contact_list.controls.append(
                             create_contact_item(
                                 contact,
-                                lambda e, cid=contact["id"], cname=contact["username"]: create_chat_with_contact_func(cid, cname)
+                                lambda e, cid=contact["id"], cname=contact["username"]:
+                                    create_chat_with_contact_func(cid, cname)
                             )
                         )
 
+                # ── Раздел «Не сохранённые» ──
+                if not_saved:
+                    contact_list.controls.append(
+                        ft.Container(
+                            content=ft.Text("Не сохранённые", size=13, weight=ft.FontWeight.BOLD,
+                                            color=ft.Colors.GREY_600),
+                            padding=ft.padding.only(left=10, top=12, bottom=4),
+                        )
+                    )
+                    for contact in not_saved:
+                        display_name = _format_phone(contact.get("phone", "")) or contact["username"]
+                        contact_copy = dict(contact)
+                        contact_copy["username"] = display_name
+                        from .ui_components import create_contact_item
+                        contact_list.controls.append(
+                            create_contact_item(
+                                contact_copy,
+                                lambda e, cid=contact["id"], cname=contact["username"]:
+                                    create_chat_with_contact_func(cid, cname)
+                            )
+                        )
+
+            search_result_container.content = None
+            search_result_container.visible = False
             page.update()
 
         def format_number(number):
-            n = str(number).strip()
-            # Убираем всё кроме цифр
-            digits = ''.join(filter(str.isdigit, n))
-            # Приводим к 10 цифрам (без кода страны)
-            if len(digits) == 11:
-                digits = digits[1:]
-            if len(digits) == 10:
-                return f"+7 ({digits[0:3]}) {digits[3:6]}-{digits[6:8]}-{digits[8:10]}"
-            return number  # если формат неизвестный — возвращаем как есть
+            return _format_phone(number)
 
         def show_search_result(data_user):
-            # *** ИСПРАВЛЕНИЕ: сервер возвращает 'post': 200, а не 'status': 200 ***
             if data_user and data_user.get("post") == 200:
 
                 def open_found_chat(e):
+                    save_contact_if_not_exists(
+                        db_path,
+                        contact_id=data_user.get("id"),
+                        username=data_user.get("login"),
+                        phone=data_user.get("number", "")
+                    )
                     create_chat_with_contact_func(
                         data_user.get("id"),
                         data_user.get("login")
@@ -276,5 +366,7 @@ def setup_handlers(page, db_path, contacts, chats, update_chats_list_func, updat
         'show_contact_selection': show_contact_selection,
         'create_chat_with_contact': create_chat_with_contact,
         'close_dialog': close_dialog,
-        'open_dialog': open_dialog
+        'open_dialog': open_dialog,
+        'show_chat_context_menu': show_chat_context_menu,
+        'toggle_favorite': handle_toggle_favorite,
     }

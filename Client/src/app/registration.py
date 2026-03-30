@@ -48,11 +48,17 @@ def main_registartion(page: ft.Page):
         if not validate_password():
             return
 
+        #Удаляем первые 1-2 символа по условию
+        phone_number = text_input_number.value
+        if len(phone_number) == 11:
+            phone_number = phone_number[1:]  # удаляем первый символ
+        elif len(phone_number) == 12:
+            phone_number = phone_number[2:]  # удаляем первые два символа
         # Подготовка данных
         data = {
             'login': text_input_login.value,
             'email': text_input_email.value,
-            'number':text_input_number.value,
+            'number': phone_number,
             'password': text_input_password.value
         }
 
@@ -78,7 +84,8 @@ def main_registartion(page: ft.Page):
                     error_text.update()
                     
         except Exception as ex:
-            error_text.value = f"Ошибка соединения: {str(ex)}"
+            error_text.value = f"Ошибка соединения с сервером :("
+            print(f"Ошибка при отправке данных: {ex}")
             error_text.visible = True
             error_text.update()
 
@@ -121,11 +128,6 @@ def main_registartion(page: ft.Page):
         on_click= lambda _: page.go('/login')
     )
 
-    #Удаляем первые 1-2 символа по условию
-    if len(text_input_number) == 11:
-        text_input_number = text_input_number[1:]  # удаляем первый символ
-    elif len(text_input_number) == 12:
-        text_input_number = text_input_number[2:]  # удаляем первые два символа
 
     # Добавляем поля в список обязательных
     required_fields = [

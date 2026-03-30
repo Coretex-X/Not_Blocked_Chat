@@ -67,6 +67,31 @@ from .components.database import init_database, load_contacts, load_chats, creat
 from .components.ui_components import create_contact_item, create_chat_item
 from .components.dialogs import create_exit_dialog, create_delete_chat_dialog, create_contact_dialog
 from .components.handlers import setup_handlers
+import sqlite3 as ql
+import path
+
+db_path = f"{path.db_path()}user_data.db"
+
+with ql.connect(db_path) as con:
+        cur = con.cursor()
+        cur.execute("SELECT status_user_contact FROM contacts LIMIT 1")
+        result = cur.fetchone()
+        cur.close()
+        result = result[0]
+
+def format_phone_number(phone):
+    phone_str = str(phone)
+
+    if len(phone_str) == 11:
+        phone_str = phone_str[1:]  # удаляем первый символ
+    elif len(phone_str) == 12:
+        phone_str = phone_str[2:]  # удаляем первые два символа
+
+    if len(phone_str) == 10 and phone_str.isdigit():
+        formatted = f"+7 ({phone_str[0:3]}){phone_str[3:6]}-{phone_str[6:8]}-{phone_str[8:10]}"
+        return formatted
+    else:
+        return "Ошибка: номер должен содержать 10 цифр"
 
 def main_menu(page):
     page.title = 'Not Blocked Chat'
@@ -132,8 +157,8 @@ def main_menu(page):
                     create_contact_item(
                         contact,
                         lambda e, cid=contact["id"], cname=contact["username"]: handlers['create_chat_with_contact'](
-                            cid, cname, update_chats_list, handlers['open_existing_chat'], contact_dialog
-                        )
+                                cid, cname, update_chats_list, handlers['open_existing_chat'], contact_dialog
+                            )
                     )
                 )
         page.update()
@@ -258,131 +283,161 @@ def main_menu(page):
 
 
 
-//app/chat.py
-import flet as ft
-from .components.chat.chat_meneger import get_chat_id, get_status_chat
-from .components.chat import chat_db as db
-from .components.chat import chat_connection as conn
-from .components.database import get_contact_id_by_chat
-from .components.chat.chat_ui import ChatUI
-import path
-# ─────────────────────────── Идентификаторы ───────────────────────────────────
-
-MY_ID      = "1"
-CONTACT_ID = "2"
+//app/components/database.py
+import sqlite3 as sql
+from datetime import datetime
 
 
+def init_database(db_path):
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
 
-# ─────────────────────────── Главная функция ──────────────────────────────────
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users_data(
+                id_user INTEGER,
+                name TEXT,
+                profile TEXT,
+                number TEXT,
+                token TEXT,
+                avatar TEXT
+            )""")
 
-def chat_view(page: ft.Page) -> ft.View:
-    """Возвращает ft.View для маршрута /chat."""
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS contacts(
+                user_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT,
+                status TEXT,
+                phone TEXT,
+                status_user_contact TEXT,
+                avatar TEXT
+            )""")
 
-    # Получаем данные собеседника из БД
-    chat_id = get_chat_id()
-    status_chat = get_status_chat()
-    #result  = db.db_user_data(chat_id)
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS chats (
+                chat_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_name TEXT NOT NULL,
+                chat_type TEXT DEFAULT 'private',
+                last_message TEXT,
+                last_message_time DATETIME,
+                unread_count INTEGER DEFAULT 0,
+                contact_id INTEGER,
+                FOREIGN KEY (contact_id) REFERENCES contacts (user_id)
+            )''')
 
-    db_path = f"{path.db_path()}user_data.db"
-    contact_id = get_contact_id_by_chat(db_path, chat_id)  # получаем contact_id из chats
-    result = db.db_user_data(contact_id) if contact_id else None
-
-    # Защита от None
-    if result is None:
-        contact_name  = "Неизвестный"
-        contact_phone = "—"
-        contact_about = "—"
-    else:
-        contact_name  = result[1]
-        contact_phone = result[3]
-        contact_about = result[2]
-
-    contact_user = {
-        "id":           CONTACT_ID,
-        "name":         contact_name,
-        "avatar_color": ft.Colors.GREY,
-        "phone":        contact_phone,
-        "about":        contact_about,
-        "last_seen":    "None",
-    }
-
-    CURRENT_USER = {
-        "id":           MY_ID,
-        "name":         "None",
-        "avatar_color": ft.Colors.GREY,
-        "phone":        "None",
-        "status":       "None",
-        "about":        "None",
-    }
-    
-    # Запускаем WebSocket-соединение при загрузке модуля
-    conn.start_connection(MY_ID, CONTACT_ID, status_chat)
-
-    # Создаём объект UI (строит все виджеты внутри)
-    ui = ChatUI(page, CURRENT_USER, contact_user)
-
-    # Регистрируем FilePicker в overlay страницы
-    page.overlay.append(ui.file_picker)
-    page.update()
-
-    # Публикуем хуки для входящих сообщений (используются снаружи при необходимости)
-    page.data = {
-        "add_incoming_text": lambda text, sid=None: ui.add_message_to_chat(
-            ui.create_text_message(text, is_user=(sid == CURRENT_USER["id"]))),
-
-        "add_incoming_image": lambda path, name, sid=None, ot=False: ui.add_message_to_chat(
-            ui.create_image_message(path, name,
-                                    is_user=(sid == CURRENT_USER["id"]),
-                                    one_time_view=ot)),
-
-        "add_incoming_video": lambda path, name, sid=None: ui.add_message_to_chat(
-            ui.create_video_message(path, name,
-                                    is_user=(sid == CURRENT_USER["id"]))),
-
-        "add_incoming_audio": lambda path, name, sid=None: ui.add_message_to_chat(
-            ui.create_audio_message(path, name,
-                                    is_user=(sid == CURRENT_USER["id"]))),
-
-        "add_incoming_document": lambda path, name, sid=None, ftype="Файл": ui.add_message_to_chat(
-            ui.create_document_message(path, name, ftype,
-                                       is_user=(sid == CURRENT_USER["id"]))),
-    }
-
-    # Запускаем опрос очереди входящих сообщений
-    ui.poll_queue()
-
-    # ── Сборка страницы ────────────────────────────────────────────────────────
-    return ft.View(
-        "/chat",
-        controls=[
-            ft.Container(
-                expand=True,
-                content=ft.Column(
-                    [
-                        ui.chat_header,
-                        ft.Container(
-                            content=ui.messages_column,
-                            expand=True,
-                            padding=10,
-                            bgcolor=ft.Colors.GREY_100,
-                        ),
-                        ui.voice_panel,
-                        ui.input_bar,
-                    ],
-                    expand=True,
-                ),
-            )
-        ],
-        padding=0,
-        bgcolor=ft.Colors.WHITE,
-    )
+        con.commit()
 
 
+def load_contacts(db_path):
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+        cur.execute("SELECT user_id, username, status FROM contacts ORDER BY username")
+        return [{"id": c[0], "username": c[1], "status": c[2]} for c in cur.fetchall()]
 
 
+def load_chats(db_path):
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+        cur.execute('''
+            SELECT chat_id, chat_name, last_message, last_message_time, unread_count 
+            FROM chats ORDER BY last_message_time DESC
+        ''')
+        return [{"id": c[0], "name": c[1], "last_message": c[2], "last_time": c[3], "unread": c[4]}
+                for c in cur.fetchall()]
 
 
+def delete_chat_from_db(db_path, chat_id):
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+        cur.execute('DELETE FROM chats WHERE chat_id = ?', (chat_id,))
+        con.commit()
+        return cur.rowcount > 0
 
+
+def create_new_chat(db_path, contact_id, contact_name):
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+        cur.execute('SELECT chat_id FROM chats WHERE contact_id = ?', (contact_id,))
+        existing = cur.fetchone()
+        if existing:
+            return existing[0]
+        cur.execute('''
+            INSERT INTO chats (chat_name, chat_type, last_message_time, contact_id) 
+            VALUES (?, 'private', ?, ?)
+        ''', (contact_name, datetime.now(), contact_id))
+        con.commit()
+        return cur.lastrowid
+
+
+def get_user_data(db_path):
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+        try:
+            cur.execute("SELECT name, profile FROM users_data")
+            result = cur.fetchone()
+            return result if result else ('None', 'None')
+        except sql.OperationalError:
+            return ('None', 'None')
+
+
+def get_contact_id_by_chat(db_path, chat_id):
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+        cur.execute("SELECT contact_id FROM chats WHERE chat_id = ?", (chat_id,))
+        result = cur.fetchone()
+        return result[0] if result else None
+
+
+def save_contact_if_not_exists(db_path, contact_id, username, phone=""):
+    """
+    Сохраняет пользователя найденного через поиск по номеру в таблицу contacts,
+    если его там ещё нет. Помечает как 'not_save_user' в поле status_user_contact.
+    Возвращает True если запись была создана, False если уже существовала.
+    """
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+        cur.execute("SELECT user_id FROM contacts WHERE user_id = ?", (contact_id,))
+        if cur.fetchone() is not None:
+            return False
+        cur.execute(
+            """INSERT INTO contacts (user_id, username, status, phone, status_user_contact, avatar)
+               VALUES (?, ?, ?, ?, 'not_save_user', '')""",
+            (contact_id, username, "", phone)
+        )
+        con.commit()
+        return True
+
+
+def get_contact_display_name(db_path, contact_id):
+    """
+    Возвращает отображаемое имя контакта:
+    - если status_user_contact = 'not_save_user' — возвращает номер в формате +7 (XXX) XXX-XX-XX
+    - иначе — возвращает username
+    """
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT username, phone, status_user_contact FROM contacts WHERE user_id = ?",
+            (contact_id,)
+        )
+        row = cur.fetchone()
+        if row is None:
+            return "Неизвестный"
+        username, phone, status_user_contact = row
+        if status_user_contact == 'not_save_user':
+            return _format_phone(phone)
+        return username if username else "Неизвестный"
+
+
+def _format_phone(number):
+    """Форматирует номер телефона в вид +7 (XXX) XXX-XX-XX"""
+    if not number:
+        return "Неизвестный"
+    digits = ''.join(filter(str.isdigit, str(number)))
+    if len(digits) == 11:
+        digits = digits[1:]
+    if len(digits) == 10:
+        return f"+7 ({digits[0:3]}) {digits[3:6]}-{digits[6:8]}-{digits[8:10]}"
+    return number
 
 
 
@@ -452,11 +507,15 @@ def create_contact_dialog():
     return dialog, contact_list, search_field, loading_container, search_result_container
 
 
+
+
+
+
 //app/components/handlers.py
 import os
 import threading
 import time
-from .database import load_chats, delete_chat_from_db, create_new_chat
+from .database import load_chats, delete_chat_from_db, create_new_chat, save_contact_if_not_exists
 import flet as ft
 import sqlite3 as sql
 import requests as http
@@ -472,7 +531,6 @@ def number_search_contact(number):
     try:
         response = http.post(f"http://127.0.0.1:5000/search/v2/user/search_contacts/", json=data)
         data_user = response.json()
-        print(data_user)
         return data_user
     except Exception as ex:
         print(f"Ошибка поиска: {ex}")
@@ -491,7 +549,7 @@ def setup_handlers(page, db_path, contacts, chats, update_chats_list_func, updat
         page.update()
 
     def open_existing_chat(chat_id, status_chat=None):
-        if status_chat == None:
+        if status_chat is None:
             status_chat = 'existing_chat'
         set_status_chat(status_chat)
         set_chat_id(chat_id)
@@ -573,20 +631,26 @@ def setup_handlers(page, db_path, contacts, chats, update_chats_list_func, updat
 
         def format_number(number):
             n = str(number).strip()
-            # Убираем всё кроме цифр
             digits = ''.join(filter(str.isdigit, n))
-            # Приводим к 10 цифрам (без кода страны)
             if len(digits) == 11:
                 digits = digits[1:]
             if len(digits) == 10:
                 return f"+7 ({digits[0:3]}) {digits[3:6]}-{digits[6:8]}-{digits[8:10]}"
-            return number  # если формат неизвестный — возвращаем как есть
+            return number
 
         def show_search_result(data_user):
-            # *** ИСПРАВЛЕНИЕ: сервер возвращает 'post': 200, а не 'status': 200 ***
             if data_user and data_user.get("post") == 200:
 
                 def open_found_chat(e):
+                    # Сохраняем пользователя в contacts с пометкой not_save_user
+                    # если его там ещё нет. Это делается до создания чата,
+                    # чтобы chat.py мог прочитать данные из БД.
+                    save_contact_if_not_exists(
+                        db_path,
+                        contact_id=data_user.get("id"),
+                        username=data_user.get("login"),
+                        phone=data_user.get("number", "")
+                    )
                     create_chat_with_contact_func(
                         data_user.get("id"),
                         data_user.get("login")
@@ -707,108 +771,9 @@ def setup_handlers(page, db_path, contacts, chats, update_chats_list_func, updat
 
 
 
-//app/components/database.py
-import sqlite3 as sql
-from datetime import datetime
-
-def init_database(db_path):
-    with sql.connect(db_path) as con:
-        cur = con.cursor()
-
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS users_data(
-                id_user INTEGER,
-                name TEXT,
-                profile TEXT,
-                number TEXT,
-                token TEXT,
-                avatar TEXT
-            )""")
-
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS contacts(
-                user_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT,
-                status TEXT,
-                phone TEXT,
-                avatar TEXT
-            )""")
-
-        cur.execute('''
-            CREATE TABLE IF NOT EXISTS chats (
-                chat_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                chat_name TEXT NOT NULL,
-                chat_type TEXT DEFAULT 'private',
-                last_message TEXT,
-                last_message_time DATETIME,
-                unread_count INTEGER DEFAULT 0,
-                contact_id INTEGER,
-                FOREIGN KEY (contact_id) REFERENCES contacts (user_id)
-            )''')
-
-        con.commit()
-
-def load_contacts(db_path):
-    with sql.connect(db_path) as con:
-        cur = con.cursor()
-        cur.execute("SELECT user_id, username, status FROM contacts ORDER BY username")
-        return [{"id": c[0], "username": c[1], "status": c[2]} for c in cur.fetchall()]
-
-def load_chats(db_path):
-    with sql.connect(db_path) as con:
-        cur = con.cursor()
-        cur.execute('''
-            SELECT chat_id, chat_name, last_message, last_message_time, unread_count 
-            FROM chats ORDER BY last_message_time DESC
-        ''')
-        return [{"id": c[0], "name": c[1], "last_message": c[2], "last_time": c[3], "unread": c[4]}
-                for c in cur.fetchall()]
-
-def delete_chat_from_db(db_path, chat_id):
-    with sql.connect(db_path) as con:
-        cur = con.cursor()
-        cur.execute('DELETE FROM chats WHERE chat_id = ?', (chat_id,))
-        con.commit()
-        return cur.rowcount > 0
-
-def create_new_chat(db_path, contact_id, contact_name):
-    with sql.connect(db_path) as con:
-        cur = con.cursor()
-        cur.execute('SELECT chat_id FROM chats WHERE contact_id = ?', (contact_id,))
-        existing = cur.fetchone()
-        if existing:
-            return existing[0]
-        cur.execute('''
-            INSERT INTO chats (chat_name, chat_type, last_message_time, contact_id) 
-            VALUES (?, 'private', ?, ?)
-        ''', (contact_name, datetime.now(), contact_id))
-        con.commit()
-        return cur.lastrowid
-
-def get_user_data(db_path):
-    with sql.connect(db_path) as con:
-        cur = con.cursor()
-        try:
-            cur.execute("SELECT name, profile FROM users_data")
-            result = cur.fetchone()
-            return result if result else ('None', 'None')
-        except sql.OperationalError:
-            return ('None', 'None')
-        
-def get_contact_id_by_chat(db_path, chat_id):
-    with sql.connect(db_path) as con:
-        cur = con.cursor()
-        cur.execute("SELECT contact_id FROM chats WHERE chat_id = ?", (chat_id,))
-        result = cur.fetchone()
-        return result[0] if result else None
-    
 
 
 
-
-
-
-И нафсякий случий
 //app/components/ui_components.py
 import flet as ft
 from .utils import get_avatar_letter, format_chat_time
@@ -876,145 +841,4 @@ def create_chat_item(chat, on_click_handler, on_delete_handler=None):
 
 
 
-//app/components/chat/chat_connection.py
-import json
-import base64
-import threading
-import queue
-import websocket
-from .geniration_token import GuaranteedUniqueTokenGenerator
-
-# ─────────────────────────── Генирация Токена и Комнаты ───────────────────────
-
-geniration = GuaranteedUniqueTokenGenerator()
-token = geniration.generate_token(90)
-#token = '65'
-lobbi = geniration.generate_token(90)
-
-# ─────────────────────────── Константы ────────────────────────────────────────
-
-WS_URL_DATA    = "ws://127.0.0.1:5000/ws/data/"
-WS_URL_CHAT    = f"ws://127.0.0.1:5000/ws/chat_user/{token}/"
-WS_URL_NEW_CHAT    = f"ws://127.0.0.1:5000/ws/new_chat_user/{token}/"
-FILE_SEPARATOR = b"|||BINARY_DATA|||"
-lobbi_time = "lobbi"
-
-# ─────────────────────────── Состояние соединения ─────────────────────────────
-
-message_queue: queue.Queue = queue.Queue()
-ws: websocket.WebSocket | None = None
-running = True
-
-
-def authenticate(my_id: str, contact_id: str, status_chat: str):
-    """Регистрирует чат-комнату на сервере."""
-    try:
-        if my_id == "None" and contact_id == "None":
-            print("Данных нет")
-        else:
-            conn = websocket.WebSocket()
-            conn.connect(WS_URL_DATA)
-            conn.send(json.dumps({
-                "room":lobbi_time if status_chat == 'existing_chat' else lobbi,
-                "user_id":my_id,
-                "guest_id":contact_id,
-                "status_chat":status_chat,
-                "token": token,
-            }))
-            conn.close()
-    except Exception:
-        pass
-
-
-def receive_messages():
-    """Фоновый поток: читает сообщения из WebSocket и кладёт в очередь."""
-    global running
-    while running:
-        try:
-            raw = ws.recv()
-
-            # Текстовые данные — JSON-сообщение
-            if isinstance(raw, str):
-                message_queue.put(json.loads(raw))
-
-            # Бинарные данные — файл: метаданные + разделитель + байты файла
-            elif isinstance(raw, bytes):
-                sep_pos = raw.find(FILE_SEPARATOR)
-                if sep_pos == -1:
-                    print("❌ Не найден разделитель в бинарных данных")
-                    continue
-                metadata   = json.loads(raw[:sep_pos].decode("utf-8"))
-                file_bytes = raw[sep_pos + len(FILE_SEPARATOR):]
-                message_queue.put({
-                    "type":      "file",
-                    "file_name": metadata.get("file_name", "unknown"),
-                    "file_type": metadata.get("file_type", "unknown"),
-                    "file_size": metadata.get("file_size", len(file_bytes)),
-                    "file_data": base64.b64encode(file_bytes).decode("utf-8"),
-                    "sender_id": metadata.get("sender_id"),
-                })
-        except websocket.WebSocketConnectionClosedException:
-            print("❌ WebSocket соединение закрыто")
-            break
-        except Exception as e:
-            import traceback
-            print(f"❌ Ошибка получения сообщения: {e}")
-            traceback.print_exc()
-            break
-
-
-def start_connection(my_id: str, contact_id: str, status_chat: str):
-    """Инициализирует аутентификацию, открывает WS и запускает фоновый поток."""
-    global ws
-    try:
-        authenticate(my_id, contact_id, status_chat)
-        ws = websocket.WebSocket()
-        if status_chat == 'new_chat':
-            ws.connect(WS_URL_NEW_CHAT)
-        else:
-            ws.connect(WS_URL_CHAT)
-        threading.Thread(target=receive_messages, daemon=True).start()
-    except Exception:
-        pass
-
-
-def send_text(payload: dict):
-    """Отправляет JSON-сообщение через WebSocket."""
-    if ws:
-        ws.send(json.dumps(payload))
-
-
-def send_binary(data: bytes):
-    """Отправляет бинарные данные через WebSocket."""
-    if ws:
-        ws.send_binary(data)
-
-
-
-
-
-
-
-
-////app/components/chat/chat_meneger.py
-# chat_manager.py
-_chat_id = None
-def set_chat_id(value):
-    global _chat_id
-    _chat_id = value
-    return _chat_id
-
-def get_chat_id():
-    global _chat_id
-    return _chat_id
-
-
-_status_chat = None
-def set_status_chat(value):
-    global _status_chat
-    _status_chat = value
-    return _status_chat
-
-def get_status_chat():
-    global _status_chat
-    return _status_chat
+//app/components/utils.py

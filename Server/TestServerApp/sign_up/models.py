@@ -6,7 +6,7 @@ from django.contrib.auth.hashers import check_password
 class Models(models.Model):
     login = models.CharField(max_length=225, unique=True)
     email = models.EmailField(unique=True)
-    number = models.TextField()
+    number = models.TextField(unique=True)
     status = models.TextField(default='Приветствую в NBC!')
     password = models.TextField()
     token = models.TextField(unique=True)

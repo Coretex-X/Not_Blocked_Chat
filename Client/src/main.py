@@ -32,12 +32,13 @@ with ql.connect(db_path) as con:
     """)
     cur.close()
 
+
 with ql.connect(db_path) as con:
-    cur = con.cursor()
-    cur.execute("SELECT authorization FROM user_settings LIMIT 1")
-    result = cur.fetchone()
-    cur.close()
-    result = result[0]
+        cur = con.cursor()
+        cur.execute("SELECT authorization FROM user_settings LIMIT 1")
+        result = cur.fetchone()
+        cur.close()
+        result = result[0] if result else 'false'
 
 users_uathorization_false = 'false'
 users_uathorization_true = 'true'

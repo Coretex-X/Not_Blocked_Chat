@@ -28,13 +28,18 @@ class RegistrationView(APIView):
 
         #Хеширование поролей
         response_password_hash = make_password(response_password)
+
+        #Генерация токена
+        geniration = GuaranteedUniqueTokenGenerator()
+        token = geniration.generate_token(100)
         
         #Запись данных в БД
         Models.objects.create(
             login=response_login, 
             email=response_email,
             number=response_number, 
-            password=response_password_hash
+            password=response_password_hash,
+            token=token
             )
            
         return Response({"post":status.HTTP_201_CREATED})
@@ -66,15 +71,11 @@ class LoginView(APIView):
         #проверка пороли
         if queryset_login.check_password(response_password):
            #Если всё верно возврощаем данные пользователя
-            geniration = GuaranteedUniqueTokenGenerator()
-            token = geniration.generate_token(100)
-            queryset_login.token = str(token)
-            queryset_login.save()
             return Response({
                 'id_users':queryset_login.id,
                 'login': response_login,
                 'number':queryset_login.number,
-                'token':token,
+                'token':queryset_login.token,
                 'profil':'Приветствую в NBC!',
                 'status': status.HTTP_200_OK
                 })

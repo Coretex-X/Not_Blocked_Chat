@@ -120,17 +120,21 @@ def main_menu(page):
                 )
             )
         else:
+            # Строим словарь contact_id -> status_user_contact для быстрого доступа
+            contact_status_map = {c["id"]: c.get("status_user_contact", "save_user") for c in contacts}
             for chat in chats:
-                # Определяем отображаемое имя чата по status_user_contact контакта
                 display_chat = dict(chat)
-                if chat.get("contact_id"):
-                    display_chat["name"] = get_contact_display_name(db_path, chat["contact_id"])
+                contact_id = chat.get("contact_id")
+                if contact_id:
+                    display_chat["name"] = get_contact_display_name(db_path, contact_id)
+                c_status = contact_status_map.get(contact_id, "save_user")
                 chats_container.controls.append(
                     create_chat_item(
                         display_chat,
                         lambda cid=chat["id"]: handlers['open_existing_chat'](cid),
-                        on_long_press_handler=lambda cid=chat["id"], cname=display_chat["name"]:
-                            handlers['show_chat_context_menu'](cid, cname, update_chats_list)
+                        on_menu_handler=lambda cid=chat["id"], action=None:
+                            handlers['handle_chat_menu'](cid, action, update_chats_list),
+                        contact_status=c_status,
                     )
                 )
         update_favorites_list()
@@ -145,23 +149,27 @@ def main_menu(page):
                     content=ft.Column([
                         ft.Icon(ft.Icons.STAR_OUTLINE, size=50, color=ft.Colors.GREY),
                         ft.Text("Нет избранных чатов", size=16, color=ft.Colors.GREY),
-                        ft.Text("Удерживайте чат, чтобы добавить в избранное",
+                        ft.Text("Нажмите на три точки углу чата, чтобы добавить в избранное",
                                 size=14, color=ft.Colors.GREY_400, text_align=ft.TextAlign.CENTER),
                     ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10),
                     padding=ft.padding.all(40), alignment=ft.alignment.center,
                 )
             )
         else:
+            contact_status_map = {c["id"]: c.get("status_user_contact", "save_user") for c in contacts}
             for chat in favorites:
                 display_chat = dict(chat)
-                if chat.get("contact_id"):
-                    display_chat["name"] = get_contact_display_name(db_path, chat["contact_id"])
+                contact_id = chat.get("contact_id")
+                if contact_id:
+                    display_chat["name"] = get_contact_display_name(db_path, contact_id)
+                c_status = contact_status_map.get(contact_id, "save_user")
                 favorites_container.controls.append(
                     create_chat_item(
                         display_chat,
                         lambda cid=chat["id"]: handlers['open_existing_chat'](cid),
-                        on_long_press_handler=lambda cid=chat["id"], cname=display_chat["name"]:
-                            handlers['show_chat_context_menu'](cid, cname, update_chats_list)
+                        on_menu_handler=lambda cid=chat["id"], action=None:
+                            handlers['handle_chat_menu'](cid, action, update_chats_list),
+                        contact_status=c_status,
                     )
                 )
         page.update()

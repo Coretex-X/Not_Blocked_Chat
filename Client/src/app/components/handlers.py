@@ -101,58 +101,43 @@ def setup_handlers(page, db_path, contacts, chats, update_chats_list_func, updat
             confirm_dialog.open = False
             page.update()
 
-    # ─── ИЗБРАННОЕ ─────────────────────────────────────────────────────────────
-    def handle_toggle_favorite(chat_id, context_menu_dialog, update_fn):
-        """Добавляет/убирает чат из избранного и обновляет списки."""
-        toggle_chat_favorite(db_path, chat_id)
-        context_menu_dialog.open = False
-        update_fn()
-        page.update()
-
-    # ─── КОНТЕКСТНОЕ МЕНЮ ЧАТА (долгое нажатие) ───────────────────────────────
-    def show_chat_context_menu(chat_id, chat_name, update_fn):
+    # ─── МЕНЮ ТРЁХ ТОЧЕК У ЧАТА ───────────────────────────────────────────────
+    def handle_chat_menu(chat_id, action, update_fn):
         """
-        Показывает всплывающее окно при долгом нажатии на чат.
-        Содержит: Добавить/Убрать из избранного + Удалить.
+        Обрабатывает выбор пункта меню ⋮ у чата.
+        action: 'delete' | 'favorite' | 'save_contact' | 'edit_contact'
         """
-        favorite = is_chat_favorite(db_path, chat_id)
-        favorite_label = "Убрать из избранного" if favorite else "Добавить в избранное"
-        favorite_icon = ft.Icons.STAR_OUTLINE if favorite else ft.Icons.STAR
+        if action == "delete":
+            if delete_chat_from_db(db_path, chat_id):
+                update_fn()
+                page.update()
 
-        context_dialog = ft.AlertDialog(
-            title=ft.Text(chat_name, overflow=ft.TextOverflow.ELLIPSIS, max_lines=1),
-            content=None,
-            actions=[
-                ft.TextButton(
-                    content=ft.Row([
-                        ft.Icon(favorite_icon, color=ft.Colors.AMBER),
-                        ft.Text(favorite_label),
-                    ], spacing=8),
-                    on_click=lambda e: handle_toggle_favorite(chat_id, context_dialog, update_fn),
-                ),
-                ft.TextButton(
-                    content=ft.Row([
-                        ft.Icon(ft.Icons.DELETE_OUTLINE, color=ft.Colors.RED),
-                        ft.Text("Удалить чат", color=ft.Colors.RED),
-                    ], spacing=8),
-                    on_click=lambda e: _delete_from_context(chat_id, context_dialog, update_fn),
-                ),
-                ft.TextButton(
-                    "Отмена",
-                    on_click=lambda e: setattr(context_dialog, 'open', False) or page.update()
-                ),
-            ],
-        )
-        page.dialog = context_dialog
-        context_dialog.open = True
-        page.update()
+        elif action == "favorite":
+            toggle_chat_favorite(db_path, chat_id)
+            update_fn()
+            page.update()
 
-    def _delete_from_context(chat_id, context_dialog, update_fn):
-        context_dialog.open = False
-        page.update()
-        delete_chat_from_db(db_path, chat_id)
-        update_fn()
-        page.update()
+        elif action == "save_contact":
+            # TODO: реальная работа с БД
+            dlg = ft.AlertDialog(
+                title=ft.Text("В разработке"),
+                content=ft.Text("Сохранение контакта в БД будет добавлено позже"),
+                actions=[ft.TextButton("OK", on_click=lambda e: setattr(dlg, 'open', False) or page.update())]
+            )
+            page.dialog = dlg
+            dlg.open = True
+            page.update()
+
+        elif action == "edit_contact":
+            # TODO: реальная работа с БД
+            dlg = ft.AlertDialog(
+                title=ft.Text("В разработке"),
+                content=ft.Text("Редактирование контакта в БД будет добавлено позже"),
+                actions=[ft.TextButton("OK", on_click=lambda e: setattr(dlg, 'open', False) or page.update())]
+            )
+            page.dialog = dlg
+            dlg.open = True
+            page.update()
 
     def soon_popup(e):
         dlg = ft.AlertDialog(
@@ -367,6 +352,7 @@ def setup_handlers(page, db_path, contacts, chats, update_chats_list_func, updat
         'create_chat_with_contact': create_chat_with_contact,
         'close_dialog': close_dialog,
         'open_dialog': open_dialog,
-        'show_chat_context_menu': show_chat_context_menu,
-        'toggle_favorite': handle_toggle_favorite,
+        'show_chat_context_menu': None,
+        'toggle_favorite': None,
+        'handle_chat_menu': handle_chat_menu,
     }

@@ -44,7 +44,9 @@ def main(page: ft.Page):
         if not is_authorized:
             page.views.append(main_sign_up(page))
 
-        if page.route == "/settings":
+        if page.route == "/main":
+            page.views.append(main_menu(page))
+        elif page.route == "/settings":
             page.views.append(settings_view(page))
         elif page.route == "/registration":
             page.views.append(main_registartion(page))

@@ -13,6 +13,8 @@ def main_menu(page: ft.Page) -> ft.View:
     db = f"{path.db_path()}user_data.db"
     init_database(db)
 
+    page.title = "Not Blocked Chat"
+
     contacts  = load_contacts(db)
     chats     = load_chats(db)
     user_data = get_user_data(db)

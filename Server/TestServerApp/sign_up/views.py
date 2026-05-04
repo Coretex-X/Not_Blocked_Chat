@@ -6,6 +6,7 @@ from .models import *
 from .geniration_token import GuaranteedUniqueTokenGenerator
 from .serializer import Serializer
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
+from django.views.decorators.csrf import csrf_exempt
 
 class RegistrationView(APIView):
     serializer_class = Serializer
@@ -45,8 +46,8 @@ class RegistrationView(APIView):
         return Response({"post":status.HTTP_201_CREATED})
         
         
-
-class LoginView(APIView):                                                                                           
+class LoginView(APIView): 
+                                                                                             
     def post(self, request):
         #получаем данные пользовтеля                                                                                        
         response_login = request.data.get('login')                                                                  

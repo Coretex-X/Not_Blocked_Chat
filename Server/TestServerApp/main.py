@@ -18,16 +18,17 @@ import threading
 response = rq.post("http://127.0.0.1:5000/api/v2/user/registration/", json=json_reqistartion)
 
 response_json = response.json()
-id_user = response_json["id_users"]
+id_user = response_json["id_users"]'''
 
 
 json_login = {
-    "login":"User4",
+    "login":"Магомедрасул",
     "password":"12345678"
 }
 response_login = rq.post("http://127.0.0.1:5000/api/v2/user/login/", json=json_login)
+print(response_login)
 
-response_json = response_login.json()
+'''response_json = response_login.json()
 id_user = response_json["id_users"]
 
 sesion = {
@@ -36,7 +37,7 @@ sesion = {
 }
 response_sesion = rq.post("http://127.0.0.1:5000/api/v2/user/sesion/", json=sesion)
 
-print(response_login)'''
+print(response_login)
 
 # 1. Аутентификация
 ws_auth = websocket.WebSocket()
@@ -92,7 +93,7 @@ ws.close()
 
 
 
-'''# Получаем ответ
+# Получаем ответ
 response = ws_auth.recv()
 print(f"Auth response: {response}")
 ws_auth.close()

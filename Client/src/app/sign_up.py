@@ -73,7 +73,7 @@ def main_sign_up(page: ft.Page):
                 text_input_login.value = ""
                 text_input_password.value = ""
                 #Перенапровляем на главную страницу
-                page.go('/')
+                page.go('/main')
                 page.update()
             cur.close()
 

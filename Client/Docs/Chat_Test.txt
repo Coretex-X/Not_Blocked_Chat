@@ -59,296 +59,130 @@ Chat_Test__
                 main.py
                 path.py
 
-
-//main.py
-import flet as ft
-import sqlite3 as ql
-from app.menu import main_menu
-from app.settings import settings_view
-from app.registration import main_registartion
-from app.sign_up import main_sign_up
-from app.chat import chat_view
-import path
-
-db_path = f'{path.db_path()}user_data.db'
-
-# Создаем таблицы если их нет
-with ql.connect(db_path) as con:
-    cur = con.cursor()
-    
-    # Таблица пользователей
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS users_data(
-            id_user INTEGER,
-            name TEXT,
-            profile TEXT,
-            number TEXT,
-            token TEXT,
-            avatar TEXT)
-        """)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS user_settings(
-            authorization TEXT DEFAULT 'false',
-            color_theme TEXT DEFAULT 'light',
-            language TEXT DEFAULT 'ru'
-        )
-    """)
-    cur.close()
-
-
-with ql.connect(db_path) as con:
-        cur = con.cursor()
-        cur.execute("SELECT authorization FROM user_settings LIMIT 1")
-        result = cur.fetchone()
-        cur.close()
-        result = result[0] if result else 'false'
-
-users_uathorization_false = 'false'
-users_uathorization_true = 'true'
-
-def main(page: ft.Page):
-    def route_change(route):
-        page.views.clear()
-
-        page.views.append(
-            main_menu(page)
-            )
-
-        if result == users_uathorization_true:
-            page.views.append(
-                main_menu(page)
-            )
-        elif result == users_uathorization_false:
-            page.views.append(
-                main_sign_up(page))
-
-        if page.route == "/settings":
-            page.views.append(
-                settings_view(page)
-            )
-
-
-        elif page.route == "/registration":
-            page.views.append(
-                main_registartion(page)
-            )
-
-        elif page.route == "/login":
-           page.views.append(
-                main_sign_up(page)
-            )
-           
-        elif page.route == "/chat":
-            page.views.append(
-                chat_view(page)
-            )
-
-        page.update()
-
-    def view_pop(view):
-        page.views.pop()
-        top_view = page.views[-1]
-        page.go(top_view.route)
-
-    page.on_route_change = route_change
-    #page.on_view_pop = view_pop
-    page.go(page.route)
-
-#ft.app(target=main, view=ft.AppView.WEB_BROWSER, port=8000,)
-ft.app(main)
-
-
-
 //app/menu.py
 import flet as ft
 import path
 from .components.database import (
-    init_database, load_contacts, load_chats, create_new_chat, get_user_data,
-    load_favorite_chats, get_contact_display_name
+    init_database, load_contacts, load_chats,
+    get_user_data, load_favorite_chats, get_contact_display_name,
 )
 from .components.ui_components import create_contact_item, create_chat_item
-from .components.dialogs import create_exit_dialog, create_delete_chat_dialog, create_contact_dialog
+from .components.dialogs import create_exit_dialog, create_contact_dialog
 from .components.handlers import setup_handlers
-import sqlite3 as ql
-
-db_path = f"{path.db_path()}user_data.db"
 
 
-def format_phone_number(phone):
-    phone_str = str(phone)
-    if len(phone_str) == 11:
-        phone_str = phone_str[1:]
-    elif len(phone_str) == 12:
-        phone_str = phone_str[2:]
-    if len(phone_str) == 10 and phone_str.isdigit():
-        return f"+7 ({phone_str[0:3]}){phone_str[3:6]}-{phone_str[6:8]}-{phone_str[8:10]}"
-    return "Ошибка: номер должен содержать 10 цифр"
+def main_menu(page: ft.Page) -> ft.View:
+    db = f"{path.db_path()}user_data.db"
+    init_database(db)
 
+    page.title = "Not Blocked Chat"
 
-def main_menu(page):
-    page.title = 'Not Blocked Chat'
+    contacts  = load_contacts(db)
+    chats     = load_chats(db)
+    user_data = get_user_data(db)
 
-    db_path = f"{path.db_path()}user_data.db"
-    init_database(db_path)
+    exit_dlg                                               = create_exit_dialog()
+    contact_dialog, contact_list, search_field, \
+        loading_container, search_result_container         = create_contact_dialog()
 
-    contacts = load_contacts(db_path)
-    chats = load_chats(db_path)
-    user_data = get_user_data(db_path)  # (name, profile)
+    chats_col     = ft.Column(scroll=ft.ScrollMode.ADAPTIVE, spacing=2, expand=True)
+    favorites_col = ft.Column(scroll=ft.ScrollMode.ADAPTIVE, spacing=2, expand=True)
+    contacts_col  = ft.Column(scroll=ft.ScrollMode.ADAPTIVE, spacing=2, expand=True)
 
-    dlg = create_exit_dialog()
-    confirm_dialog = create_delete_chat_dialog()
-
-    contact_dialog, contact_list, search_field, loading_container, search_result_container = create_contact_dialog()
-
-    chats_container = ft.Column(scroll=ft.ScrollMode.ADAPTIVE, spacing=2, expand=True)
-    favorites_container = ft.Column(scroll=ft.ScrollMode.ADAPTIVE, spacing=2, expand=True)
-    contacts_tab_content = ft.Column(scroll=ft.ScrollMode.ADAPTIVE, spacing=2, expand=True)
-
-    # ─── Кнопки Новый чат / Новая группа — нижний правый угол ────────────────
     new_chat_fab = ft.FloatingActionButton(
-        icon=ft.Icons.CHAT,
-        tooltip="Новый чат",
-        mini=True,
-        on_click=None,
-    )
+        icon=ft.Icons.CHAT, tooltip="Новый чат", mini=True, on_click=None)
     new_group_fab = ft.FloatingActionButton(
-        icon=ft.Icons.GROUP_ADD,
-        tooltip="Новая группа",
-        mini=True,
-        on_click=None,
-    )
+        icon=ft.Icons.GROUP_ADD, tooltip="Новая группа", mini=True, on_click=None)
 
-    # Контейнер FAB — прибит к правому нижнему углу
-    fab_stack = ft.Container(
-        content=ft.Row(
-            controls=[new_chat_fab, new_group_fab],
-            spacing=8,
-            tight=True,
-        ),
-        alignment=ft.alignment.bottom_right,
-        padding=ft.padding.only(right=16, bottom=16),
-    )
+    # ── Вспомогательная: статус контакта по chat ──────────────────────────────
+
+    def _contact_status_map():
+        return {c["id"]: c.get("status_user_contact", "save_user") for c in contacts}
+
+    def _make_chat_item(chat, status_map):
+        display = dict(chat)
+        cid = chat.get("contact_id")
+        if cid:
+            display["name"] = get_contact_display_name(db, cid)
+        c_status = status_map.get(cid, "save_user")
+        return create_chat_item(
+            display,
+            lambda cid=chat["id"]: handlers['open_existing_chat'](cid),
+            on_menu_handler=lambda cid=chat["id"], action=None:
+                handlers['handle_chat_menu'](cid, action, update_chats_list),
+            contact_status=c_status,
+        )
+
+    # ── Обновление вкладок ────────────────────────────────────────────────────
+
+    def _empty(icon, text, hint=""):
+        return ft.Container(
+            content=ft.Column([
+                ft.Icon(icon, size=50, color=ft.Colors.GREY),
+                ft.Text(text, size=16, color=ft.Colors.GREY),
+                *([ ft.Text(hint, size=14, color=ft.Colors.GREY_400,
+                            text_align=ft.TextAlign.CENTER) ] if hint else []),
+            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10),
+            padding=ft.padding.all(50), alignment=ft.alignment.center,
+        )
 
     def update_chats_list():
         nonlocal chats
-        chats = load_chats(db_path)
-        chats_container.controls.clear()
-        if not chats:
-            chats_container.controls.append(
-                ft.Container(
-                    content=ft.Column([
-                        ft.Icon(ft.Icons.CHAT, size=50, color=ft.Colors.GREY),
-                        ft.Text("Нет чатов", size=16, color=ft.Colors.GREY),
-                        ft.Text("Начните новый чат, нажав кнопку ниже", size=14, color=ft.Colors.GREY_400),
-                    ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10),
-                    padding=ft.padding.all(50), alignment=ft.alignment.center,
-                )
-            )
-        else:
-            # Строим словарь contact_id -> status_user_contact для быстрого доступа
-            contact_status_map = {c["id"]: c.get("status_user_contact", "save_user") for c in contacts}
+        chats = load_chats(db)
+        chats_col.controls.clear()
+        smap = _contact_status_map()
+        if chats:
             for chat in chats:
-                display_chat = dict(chat)
-                contact_id = chat.get("contact_id")
-                if contact_id:
-                    display_chat["name"] = get_contact_display_name(db_path, contact_id)
-                c_status = contact_status_map.get(contact_id, "save_user")
-                chats_container.controls.append(
-                    create_chat_item(
-                        display_chat,
-                        lambda cid=chat["id"]: handlers['open_existing_chat'](cid),
-                        on_menu_handler=lambda cid=chat["id"], action=None:
-                            handlers['handle_chat_menu'](cid, action, update_chats_list),
-                        contact_status=c_status,
-                    )
-                )
+                chats_col.controls.append(_make_chat_item(chat, smap))
+        else:
+            chats_col.controls.append(
+                _empty(ft.Icons.CHAT, "Нет чатов",
+                       "Начните новый чат, нажав кнопку ниже"))
         update_favorites_list()
         page.update()
 
     def update_favorites_list():
-        favorites = load_favorite_chats(db_path)
-        favorites_container.controls.clear()
-        if not favorites:
-            favorites_container.controls.append(
-                ft.Container(
-                    content=ft.Column([
-                        ft.Icon(ft.Icons.STAR_OUTLINE, size=50, color=ft.Colors.GREY),
-                        ft.Text("Нет избранных чатов", size=16, color=ft.Colors.GREY),
-                        ft.Text("Удерживайте чат, чтобы добавить в избранное",
-                                size=14, color=ft.Colors.GREY_400, text_align=ft.TextAlign.CENTER),
-                    ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10),
-                    padding=ft.padding.all(40), alignment=ft.alignment.center,
-                )
-            )
+        favs = load_favorite_chats(db)
+        favorites_col.controls.clear()
+        smap = _contact_status_map()
+        if favs:
+            for chat in favs:
+                favorites_col.controls.append(_make_chat_item(chat, smap))
         else:
-            contact_status_map = {c["id"]: c.get("status_user_contact", "save_user") for c in contacts}
-            for chat in favorites:
-                display_chat = dict(chat)
-                contact_id = chat.get("contact_id")
-                if contact_id:
-                    display_chat["name"] = get_contact_display_name(db_path, contact_id)
-                c_status = contact_status_map.get(contact_id, "save_user")
-                favorites_container.controls.append(
-                    create_chat_item(
-                        display_chat,
-                        lambda cid=chat["id"]: handlers['open_existing_chat'](cid),
-                        on_menu_handler=lambda cid=chat["id"], action=None:
-                            handlers['handle_chat_menu'](cid, action, update_chats_list),
-                        contact_status=c_status,
-                    )
-                )
+            favorites_col.controls.append(
+                _empty(ft.Icons.STAR_OUTLINE, "Нет избранных чатов",
+                       "Удерживайте чат, чтобы добавить в избранное"))
         page.update()
 
     def update_contacts_tab():
-        contacts_tab_content.controls.clear()
+        contacts_col.controls.clear()
         if not contacts:
-            contacts_tab_content.controls.append(
-                ft.Container(
-                    content=ft.Column([
-                        ft.Icon(ft.Icons.CONTACTS, size=50, color=ft.Colors.GREY),
-                        ft.Text("Нет контактов", size=16, color=ft.Colors.GREY),
-                    ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10),
-                    padding=ft.padding.all(50), alignment=ft.alignment.center,
-                )
-            )
+            contacts_col.controls.append(
+                _empty(ft.Icons.CONTACTS, "Нет контактов"))
         else:
-            for contact in contacts:
-                # Определяем отображаемое имя по status_user_contact
-                status = contact.get("status_user_contact", "save_user")
-                if status == "not_save_user":
-                    phone = contact.get("phone", "")
-                    digits = ''.join(filter(str.isdigit, str(phone)))
-                    if len(digits) == 11:
-                        digits = digits[1:]
-                    display_name = (
-                        f"+7 ({digits[0:3]}) {digits[3:6]}-{digits[6:8]}-{digits[8:10]}"
-                        if len(digits) == 10 else phone
-                    )
-                else:
-                    display_name = contact["username"]
-
-                contact_display = dict(contact)
-                contact_display["username"] = display_name
-
-                contacts_tab_content.controls.append(
+            for c in contacts:
+                contacts_col.controls.append(
                     create_contact_item(
-                        contact_display,
-                        lambda e, cid=contact["id"], cname=contact["username"]:
+                        c,
+                        lambda e, cid=c["id"], cname=c["username"]:
                             handlers['create_chat_with_contact'](
-                                cid, cname, update_chats_list, handlers['open_existing_chat'], contact_dialog
+                                cid, cname, update_chats_list,
+                                handlers['open_existing_chat'], contact_dialog
                             )
                     )
                 )
         page.update()
 
+    # ── Обработчики ───────────────────────────────────────────────────────────
+
     handlers = setup_handlers(
-        page=page, db_path=db_path, contacts=contacts, chats=chats,
+        page=page, db_path=db, contacts=contacts, chats=chats,
         update_chats_list_func=update_chats_list,
-        update_contacts_tab_func=update_contacts_tab
+        update_contacts_tab_func=update_contacts_tab,
     )
 
-    dlg.actions[0].on_click = lambda e: handlers['close_dialog'](e, dlg)
-    dlg.actions[1].on_click = handlers['get_out']
+    exit_dlg.actions[0].on_click = lambda e: handlers['close_dialog'](e, exit_dlg)
+    exit_dlg.actions[1].on_click = handlers['get_out']
 
     def open_new_chat_dialog(e):
         handlers['show_contact_selection'](
@@ -356,58 +190,59 @@ def main_menu(page):
             lambda cid, cname: handlers['create_chat_with_contact'](
                 cid, cname, update_chats_list, handlers['open_existing_chat'], contact_dialog
             ),
-            loading_container, search_result_container
+            loading_container, search_result_container,
         )
 
-    new_chat_fab.on_click = open_new_chat_dialog
+    new_chat_fab.on_click  = open_new_chat_dialog
     new_group_fab.on_click = handlers['soon_popup']
 
+    # ── AppBar ────────────────────────────────────────────────────────────────
+
     appbar = ft.AppBar(
-        leading=ft.Image(src="image/not_blocked_chat.ico", width=10, height=10, fit=ft.ImageFit.CONTAIN),
+        leading=ft.Image(src="image/not_blocked_chat.ico",
+                         width=10, height=10, fit=ft.ImageFit.CONTAIN),
         leading_width=40,
         title=ft.Text("Not Blocked Chat", weight=ft.FontWeight.BOLD),
         center_title=False,
         bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
-        actions=[
-            ft.PopupMenuButton(items=[
-                ft.PopupMenuItem(
-                    content=ft.Container(
-                        content=ft.Column(
-                            controls=[
-                                ft.CircleAvatar(foreground_image_src='image/user.png', radius=40),
-                                ft.Text(user_data[0], weight=ft.FontWeight.BOLD, size=20,
-                                        text_align=ft.TextAlign.CENTER, overflow=ft.TextOverflow.ELLIPSIS, max_lines=1),
-                                ft.Text(user_data[1], size=12, color=ft.Colors.GREY,
-                                        text_align=ft.TextAlign.CENTER, overflow=ft.TextOverflow.ELLIPSIS, max_lines=1),
-                            ],
-                            horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10,
-                        ),
-                        padding=ft.padding.symmetric(vertical=10), alignment=ft.alignment.center, width=250,
-                    )
-                ),
-                ft.PopupMenuItem(),
-                # ── Новый чат и Новая группа возвращены в меню ──
-                ft.PopupMenuItem(
-                    content=ft.Row([ft.Icon(ft.Icons.CHAT, size=20), ft.Text('Новый чат')], spacing=10),
-                    on_click=open_new_chat_dialog,
-                ),
-                ft.PopupMenuItem(
-                    content=ft.Row([ft.Icon(ft.Icons.GROUP_ADD, size=20), ft.Text('Новая группа')], spacing=10),
-                    on_click=handlers['soon_popup'],
-                ),
-                ft.PopupMenuItem(),
-                ft.PopupMenuItem(
-                    content=ft.Row([ft.Icon(ft.Icons.SETTINGS_OUTLINED, size=20), ft.Text("Настройки")], spacing=10),
-                    on_click=lambda _: page.go('/settings')
-                ),
-                ft.PopupMenuItem(),
-                ft.PopupMenuItem(
-                    content=ft.Row([ft.Icon(ft.Icons.LOGOUT, size=20), ft.Text("Выйти")], spacing=10),
-                    on_click=lambda _: handlers['open_dialog'](_, dlg),
-                ),
-            ])
-        ],
+        actions=[ft.PopupMenuButton(items=[
+            ft.PopupMenuItem(content=ft.Container(
+                content=ft.Column([
+                    ft.CircleAvatar(foreground_image_src='image/user.png', radius=40),
+                    ft.Text(user_data[0], weight=ft.FontWeight.BOLD, size=20,
+                            text_align=ft.TextAlign.CENTER,
+                            overflow=ft.TextOverflow.ELLIPSIS, max_lines=1),
+                    ft.Text(user_data[1], size=12, color=ft.Colors.GREY,
+                            text_align=ft.TextAlign.CENTER,
+                            overflow=ft.TextOverflow.ELLIPSIS, max_lines=1),
+                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10),
+                padding=ft.padding.symmetric(vertical=10),
+                alignment=ft.alignment.center, width=250,
+            )),
+            ft.PopupMenuItem(),
+            ft.PopupMenuItem(
+                content=ft.Row([ft.Icon(ft.Icons.CHAT, size=20), ft.Text('Новый чат')], spacing=10),
+                on_click=open_new_chat_dialog,
+            ),
+            ft.PopupMenuItem(
+                content=ft.Row([ft.Icon(ft.Icons.GROUP_ADD, size=20), ft.Text('Новая группа')], spacing=10),
+                on_click=handlers['soon_popup'],
+            ),
+            ft.PopupMenuItem(),
+            ft.PopupMenuItem(
+                content=ft.Row([ft.Icon(ft.Icons.SETTINGS_OUTLINED, size=20),
+                                ft.Text("Настройки")], spacing=10),
+                on_click=lambda _: page.go('/settings'),
+            ),
+            ft.PopupMenuItem(),
+            ft.PopupMenuItem(
+                content=ft.Row([ft.Icon(ft.Icons.LOGOUT, size=20), ft.Text("Выйти")], spacing=10),
+                on_click=lambda _: handlers['open_dialog'](_, exit_dlg),
+            ),
+        ])],
     )
+
+    # ── Вкладки ───────────────────────────────────────────────────────────────
 
     tabs = ft.Tabs(
         selected_index=0,
@@ -418,10 +253,10 @@ def main_menu(page):
             ft.Tab(
                 text="Чаты", icon=ft.Icons.CHAT,
                 content=ft.Container(
-                    content=ft.Column(
-                        controls=[chats_container, ft.Row([new_chat_fab], alignment=ft.MainAxisAlignment.END)],
-                        expand=True, spacing=4,
-                    ),
+                    content=ft.Column([
+                        chats_col,
+                        ft.Row([new_chat_fab], alignment=ft.MainAxisAlignment.END),
+                    ], expand=True, spacing=4),
                     padding=ft.padding.symmetric(horizontal=5, vertical=10),
                     expand=True,
                 ),
@@ -429,27 +264,24 @@ def main_menu(page):
             ft.Tab(
                 text="Группы", icon=ft.Icons.GROUP,
                 content=ft.Container(
-                    content=ft.Column(
-                        controls=[
-                            ft.Container(
-                                content=ft.Column([
-                                    ft.Icon(ft.Icons.GROUP, size=50, color=ft.Colors.GREY),
-                                    ft.Text("Группы появятся здесь", size=16, color=ft.Colors.GREY),
-                                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=20),
-                                alignment=ft.alignment.center, expand=True,
-                            ),
-                            ft.Row([new_group_fab], alignment=ft.MainAxisAlignment.END),
-                        ],
-                        expand=True, spacing=4,
-                    ),
-                    padding=ft.padding.all(10),
-                    expand=True,
+                    content=ft.Column([
+                        ft.Container(
+                            content=ft.Column([
+                                ft.Icon(ft.Icons.GROUP, size=50, color=ft.Colors.GREY),
+                                ft.Text("Группы появятся здесь", size=16,
+                                        color=ft.Colors.GREY),
+                            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=20),
+                            alignment=ft.alignment.center, expand=True,
+                        ),
+                        ft.Row([new_group_fab], alignment=ft.MainAxisAlignment.END),
+                    ], expand=True, spacing=4),
+                    padding=ft.padding.all(10), expand=True,
                 ),
             ),
             ft.Tab(
                 text="Избранное", icon=ft.Icons.STAR,
                 content=ft.Container(
-                    content=favorites_container,
+                    content=favorites_col,
                     padding=ft.padding.symmetric(horizontal=5, vertical=10),
                     expand=True,
                 ),
@@ -461,168 +293,36 @@ def main_menu(page):
 
     return ft.View(
         "/",
-        [tabs, dlg, contact_dialog, confirm_dialog],
+        [tabs, exit_dlg, contact_dialog],
         appbar=appbar,
         padding=0,
-    )
-
-
-
-//app/chat.py
-import flet as ft
-from .components.chat.chat_meneger import get_chat_id, get_status_chat
-from .components.chat import chat_db as db
-from .components.chat import chat_connection as conn
-from .components.database import get_contact_id_by_chat, get_contact_display_name
-from .components.chat.chat_ui import ChatUI
-import path
-
-def format_phone_number(phone):
-    phone_str = str(phone)
-
-    if len(phone_str) == 11:
-        phone_str = phone_str[1:]  # удаляем первый символ
-    elif len(phone_str) == 12:
-        phone_str = phone_str[2:]  # удаляем первые два символа
-
-    if len(phone_str) == 10 and phone_str.isdigit():
-        formatted = f"+7 ({phone_str[0:3]}){phone_str[3:6]}-{phone_str[6:8]}-{phone_str[8:10]}"
-        return formatted
-    else:
-        return "Ошибка: номер должен содержать 10 цифр"
-
-
-def chat_view(page: ft.Page) -> ft.View:
-    """Возвращает ft.View для маршрута /chat."""
-
-    chat_id = get_chat_id()
-    status_chat = get_status_chat()
-
-    db_path = f"{path.db_path()}user_data.db"
-    contact_id = get_contact_id_by_chat(db_path, chat_id)
-    my_id = db.db_user()
-    my_id = my_id[0]
-    result = db.db_user_data(contact_id) if contact_id else None
-
-    if result is None:
-        contact_name  = "Неизвестный"
-        contact_phone = "—"
-        contact_about = "—"
-    else:
-        # get_contact_display_name возвращает номер телефона в формате +7 (XXX) XXX-XX-XX
-        # если контакт помечен как not_save_user, иначе — обычное имя
-        contact_name  = get_contact_display_name(db_path, contact_id)
-        contact_phone = format_phone_number(result[3])
-        contact_about = result[2]
-
-    contact_user = {
-        "id":           contact_id,
-        "name":         contact_name,
-        "avatar_color": ft.Colors.GREY,
-        "phone":        contact_phone,
-        "about":        contact_about,
-        "last_seen":    "None",
-    }
-
-    CURRENT_USER = {
-        "id":           my_id,
-        "name":         "None",
-        "avatar_color": ft.Colors.GREY,
-        "phone":        "None",
-        "status":       "None",
-        "about":        "None",
-    }
-
-    conn.start_connection(my_id, contact_id, status_chat)
-
-    ui = ChatUI(page, CURRENT_USER, contact_user)
-
-    page.overlay.append(ui.file_picker)
-    page.update()
-
-    page.data = {
-        "add_incoming_text": lambda text, sid=None: ui.add_message_to_chat(
-            ui.create_text_message(text, is_user=(sid == CURRENT_USER["id"]))),
-
-        "add_incoming_image": lambda path, name, sid=None, ot=False: ui.add_message_to_chat(
-            ui.create_image_message(path, name,
-                                    is_user=(sid == CURRENT_USER["id"]),
-                                    one_time_view=ot)),
-
-        "add_incoming_video": lambda path, name, sid=None: ui.add_message_to_chat(
-            ui.create_video_message(path, name,
-                                    is_user=(sid == CURRENT_USER["id"]))),
-
-        "add_incoming_audio": lambda path, name, sid=None: ui.add_message_to_chat(
-            ui.create_audio_message(path, name,
-                                    is_user=(sid == CURRENT_USER["id"]))),
-
-        "add_incoming_document": lambda path, name, sid=None, ftype="Файл": ui.add_message_to_chat(
-            ui.create_document_message(path, name, ftype,
-                                       is_user=(sid == CURRENT_USER["id"]))),
-    }
-
-    ui.poll_queue()
-
-    return ft.View(
-        "/chat",
-        controls=[
-            ft.Container(
-                expand=True,
-                content=ft.Column(
-                    [
-                        ui.chat_header,
-                        ft.Container(
-                            content=ui.messages_column,
-                            expand=True,
-                            padding=10,
-                            bgcolor=ft.Colors.GREY_100,
-                        ),
-                        ui.voice_panel,
-                        ui.input_bar,
-                    ],
-                    expand=True,
-                ),
-            )
-        ],
-        padding=0,
-        bgcolor=ft.Colors.WHITE,
     )
 
 
 //app/components/database.py
 import sqlite3 as sql
 from datetime import datetime
+from .utils import format_phone
 
 
-def init_database(db_path):
+def init_database(db_path: str):
+    """Создаёт все таблицы если их нет."""
     with sql.connect(db_path) as con:
         cur = con.cursor()
-
         cur.execute("""
             CREATE TABLE IF NOT EXISTS users_data(
-                id_user INTEGER,
-                name TEXT,
-                profile TEXT,
-                number TEXT,
-                token TEXT,
-                avatar TEXT
-            )""")
-
+                id_user INTEGER, name TEXT, profile TEXT,
+                number TEXT, token TEXT, avatar TEXT)
+        """)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS contacts(
                 user_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT,
-                username_save TEXT,
-                status TEXT,
-                phone TEXT,
-                status_user_contact TEXT,
-                redacted_username TEXT,
-                avatar TEXT
-            )""")
-
-        cur.execute('''
-            CREATE TABLE IF NOT EXISTS chats (
+                username TEXT, username_save TEXT, status TEXT,
+                phone TEXT, status_user_contact TEXT,
+                redacted_username TEXT, avatar TEXT)
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS chats(
                 chat_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 chat_name TEXT NOT NULL,
                 chat_type TEXT DEFAULT 'private',
@@ -631,183 +331,32 @@ def init_database(db_path):
                 unread_count INTEGER DEFAULT 0,
                 contact_id INTEGER,
                 is_favorite INTEGER DEFAULT 0,
-                FOREIGN KEY (contact_id) REFERENCES contacts (user_id)
-            )''')
-
-        # Добавляем колонку is_favorite если её ещё нет (для существующих БД)
+                FOREIGN KEY (contact_id) REFERENCES contacts(user_id))
+        """)
+        # Миграция: добавляем is_favorite в старые БД
         try:
             cur.execute("ALTER TABLE chats ADD COLUMN is_favorite INTEGER DEFAULT 0")
             con.commit()
         except sql.OperationalError:
-            pass  # Колонка уже существует
-
+            pass
         con.commit()
 
 
-def load_contacts(db_path):
-    with sql.connect(db_path) as con:
-        cur = con.cursor()
-        cur.execute("SELECT user_id, username, status, phone, status_user_contact FROM contacts ORDER BY username")
-        return [
-            {"id": c[0], "username": c[1], "status": c[2], "phone": c[3], "status_user_contact": c[4]}
-            for c in cur.fetchall()
-        ]
+# ── Пользователи ──────────────────────────────────────────────────────────────
 
-
-def load_chats(db_path):
-    with sql.connect(db_path) as con:
-        cur = con.cursor()
-        cur.execute('''
-            SELECT chat_id, chat_name, last_message, last_message_time, unread_count, is_favorite, contact_id
-            FROM chats ORDER BY last_message_time DESC
-        ''')
-        return [
-            {"id": c[0], "name": c[1], "last_message": c[2], "last_time": c[3], "unread": c[4], "is_favorite": bool(c[5]), "contact_id": c[6]}
-            for c in cur.fetchall()
-        ]
-
-
-def delete_chat_from_db(db_path, chat_id):
-    with sql.connect(db_path) as con:
-        cur = con.cursor()
-        cur.execute('DELETE FROM chats WHERE chat_id = ?', (chat_id,))
-        con.commit()
-        return cur.rowcount > 0
-
-
-def create_new_chat(db_path, contact_id, contact_name):
-    with sql.connect(db_path) as con:
-        cur = con.cursor()
-        cur.execute('SELECT chat_id FROM chats WHERE contact_id = ?', (contact_id,))
-        existing = cur.fetchone()
-        if existing:
-            return existing[0]
-        cur.execute('''
-            INSERT INTO chats (chat_name, chat_type, last_message_time, contact_id)
-            VALUES (?, 'private', ?, ?)
-        ''', (contact_name, datetime.now(), contact_id))
-        con.commit()
-        return cur.lastrowid
-
-
-def get_user_data(db_path):
+def get_user_data(db_path: str) -> tuple:
+    """Возвращает (name, profile) текущего пользователя."""
     with sql.connect(db_path) as con:
         cur = con.cursor()
         try:
             cur.execute("SELECT name, profile FROM users_data")
-            result = cur.fetchone()
-            return result if result else ('None', 'None')
+            return cur.fetchone() or ('None', 'None')
         except sql.OperationalError:
             return ('None', 'None')
 
 
-def get_contact_id_by_chat(db_path, chat_id):
-    with sql.connect(db_path) as con:
-        cur = con.cursor()
-        cur.execute("SELECT contact_id FROM chats WHERE chat_id = ?", (chat_id,))
-        result = cur.fetchone()
-        return result[0] if result else None
-
-
-def save_contact_if_not_exists(db_path, contact_id, username, phone=""):
-    """
-    Сохраняет пользователя найденного через поиск по номеру в таблицу contacts,
-    если его там ещё нет. Помечает как 'not_save_user' в поле status_user_contact.
-    Возвращает True если запись была создана, False если уже существовала.
-    """
-    with sql.connect(db_path) as con:
-        cur = con.cursor()
-        cur.execute("SELECT user_id FROM contacts WHERE user_id = ?", (contact_id,))
-        if cur.fetchone() is not None:
-            return False
-        cur.execute(
-            """INSERT INTO contacts (user_id, username, status, phone, status_user_contact, avatar)
-               VALUES (?, ?, ?, ?, 'not_save_user', '')""",
-            (contact_id, username, "", phone)
-        )
-        con.commit()
-        return True
-
-
-def get_contact_display_name(db_path, contact_id):
-    """
-    Возвращает отображаемое имя контакта:
-    - если status_user_contact = 'not_save_user' — возвращает номер в формате +7 (XXX) XXX-XX-XX
-    - иначе — возвращает username
-    """
-    with sql.connect(db_path) as con:
-        cur = con.cursor()
-        cur.execute(
-            "SELECT username, phone, status_user_contact FROM contacts WHERE user_id = ?",
-            (contact_id,)
-        )
-        row = cur.fetchone()
-        if row is None:
-            return "Неизвестный"
-        username, phone, status_user_contact = row
-        if status_user_contact == 'not_save_user':
-            return _format_phone(phone)
-        return username if username else "Неизвестный"
-
-
-def _format_phone(number):
-    """Форматирует номер телефона в вид +7 (XXX) XXX-XX-XX"""
-    if not number:
-        return "Неизвестный"
-    digits = ''.join(filter(str.isdigit, str(number)))
-    if len(digits) == 11:
-        digits = digits[1:]
-    if len(digits) == 10:
-        return f"+7 ({digits[0:3]}) {digits[3:6]}-{digits[6:8]}-{digits[8:10]}"
-    return number
-
-
-# ─── ИЗБРАННОЕ ────────────────────────────────────────────────────────────────
-
-def toggle_chat_favorite(db_path, chat_id):
-    """Переключает статус избранного чата. Возвращает новое значение (True/False)."""
-    with sql.connect(db_path) as con:
-        cur = con.cursor()
-        cur.execute("SELECT is_favorite FROM chats WHERE chat_id = ?", (chat_id,))
-        row = cur.fetchone()
-        if row is None:
-            return False
-        new_value = 0 if row[0] else 1
-        cur.execute("UPDATE chats SET is_favorite = ? WHERE chat_id = ?", (new_value, chat_id))
-        con.commit()
-        return bool(new_value)
-
-
-def is_chat_favorite(db_path, chat_id):
-    """Проверяет, находится ли чат в избранном."""
-    with sql.connect(db_path) as con:
-        cur = con.cursor()
-        cur.execute("SELECT is_favorite FROM chats WHERE chat_id = ?", (chat_id,))
-        row = cur.fetchone()
-        return bool(row[0]) if row else False
-
-
-def load_favorite_chats(db_path):
-    """Загружает только избранные чаты."""
-    with sql.connect(db_path) as con:
-        cur = con.cursor()
-        cur.execute('''
-            SELECT chat_id, chat_name, last_message, last_message_time, unread_count, is_favorite, contact_id
-            FROM chats WHERE is_favorite = 1 ORDER BY last_message_time DESC
-        ''')
-        return [
-            {"id": c[0], "name": c[1], "last_message": c[2], "last_time": c[3], "unread": c[4], "is_favorite": True, "contact_id": c[6]}
-            for c in cur.fetchall()
-        ]
-
-
-# ─── УДАЛЕНИЕ ПОЛЬЗОВАТЕЛЯ И КОНТАКТОВ ────────────────────────────────────────
-
-def delete_user_and_contacts(db_path):
-    """
-    Удаляет данные текущего пользователя и все его контакты из БД.
-    Вызывается при нажатии кнопки 'Выйти'.
-    """
+def delete_user_and_contacts(db_path: str):
+    """Удаляет все данные пользователя (выход из аккаунта)."""
     with sql.connect(db_path) as con:
         cur = con.cursor()
         cur.execute("UPDATE user_settings SET authorization = 'false'")
@@ -817,16 +366,140 @@ def delete_user_and_contacts(db_path):
         con.commit()
 
 
+# ── Контакты ──────────────────────────────────────────────────────────────────
+
+def load_contacts(db_path: str) -> list:
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT user_id, username, status, phone, status_user_contact "
+            "FROM contacts ORDER BY username"
+        )
+        return [
+            {"id": r[0], "username": r[1], "status": r[2],
+             "phone": r[3], "status_user_contact": r[4]}
+            for r in cur.fetchall()
+        ]
+
+
+def save_contact_if_not_exists(db_path: str, contact_id, username, phone="") -> bool:
+    """Сохраняет найденного пользователя как 'not_save_user'. Возвращает True если создан."""
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+        cur.execute("SELECT user_id FROM contacts WHERE user_id = ?", (contact_id,))
+        if cur.fetchone():
+            return False
+        cur.execute(
+            "INSERT INTO contacts (user_id, username, status, phone, status_user_contact, avatar) "
+            "VALUES (?, ?, ?, ?, 'not_save_user', '')",
+            (contact_id, username, "", phone)
+        )
+        con.commit()
+        return True
+
+
+def get_contact_display_name(db_path: str, contact_id) -> str:
+    """Возвращает имя контакта или номер телефона, если контакт не сохранён."""
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT username, phone, status_user_contact FROM contacts WHERE user_id = ?",
+            (contact_id,)
+        )
+        row = cur.fetchone()
+    if not row:
+        return "Неизвестный"
+    username, phone, status = row
+    if status == 'not_save_user':
+        return format_phone(phone) or "Неизвестный"
+    return username or "Неизвестный"
+
+
+# ── Чаты ──────────────────────────────────────────────────────────────────────
+
+def load_chats(db_path: str) -> list:
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT chat_id, chat_name, last_message, last_message_time, "
+            "unread_count, is_favorite, contact_id "
+            "FROM chats ORDER BY last_message_time DESC"
+        )
+        return [
+            {"id": r[0], "name": r[1], "last_message": r[2], "last_time": r[3],
+             "unread": r[4], "is_favorite": bool(r[5]), "contact_id": r[6]}
+            for r in cur.fetchall()
+        ]
+
+
+def load_favorite_chats(db_path: str) -> list:
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT chat_id, chat_name, last_message, last_message_time, "
+            "unread_count, is_favorite, contact_id "
+            "FROM chats WHERE is_favorite = 1 ORDER BY last_message_time DESC"
+        )
+        return [
+            {"id": r[0], "name": r[1], "last_message": r[2], "last_time": r[3],
+             "unread": r[4], "is_favorite": True, "contact_id": r[6]}
+            for r in cur.fetchall()
+        ]
+
+
+def create_new_chat(db_path: str, contact_id, contact_name: str) -> int:
+    """Создаёт чат или возвращает существующий."""
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+        cur.execute("SELECT chat_id FROM chats WHERE contact_id = ?", (contact_id,))
+        existing = cur.fetchone()
+        if existing:
+            return existing[0]
+        cur.execute(
+            "INSERT INTO chats (chat_name, chat_type, last_message_time, contact_id) "
+            "VALUES (?, 'private', ?, ?)",
+            (contact_name, datetime.now(), contact_id)
+        )
+        con.commit()
+        return cur.lastrowid
+
+
+def delete_chat(db_path: str, chat_id: int) -> bool:
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+        cur.execute("DELETE FROM chats WHERE chat_id = ?", (chat_id,))
+        con.commit()
+        return cur.rowcount > 0
+
+
+def toggle_chat_favorite(db_path: str, chat_id: int) -> bool:
+    """Переключает избранное. Возвращает новое значение."""
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+        cur.execute("SELECT is_favorite FROM chats WHERE chat_id = ?", (chat_id,))
+        row = cur.fetchone()
+        if not row:
+            return False
+        new_val = 0 if row[0] else 1
+        cur.execute("UPDATE chats SET is_favorite = ? WHERE chat_id = ?", (new_val, chat_id))
+        con.commit()
+        return bool(new_val)
+
+
+def get_contact_id_by_chat(db_path: str, chat_id: int):
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+        cur.execute("SELECT contact_id FROM chats WHERE chat_id = ?", (chat_id,))
+        row = cur.fetchone()
+        return row[0] if row else None
+
+
 
 //app/components/dialogs.py
 import flet as ft
 
 
-def number(e):
-    return e.value
-
-
-def create_exit_dialog():
+def create_exit_dialog() -> ft.AlertDialog:
     return ft.AlertDialog(
         title=ft.Text("Подтверждение выхода"),
         content=ft.Text("Вы уверены, что хотите выйти?"),
@@ -837,30 +510,19 @@ def create_exit_dialog():
     )
 
 
-def create_delete_chat_dialog():
-    return ft.AlertDialog(
-        title=ft.Text("Удаление чата"),
-        content=ft.Text(""),
-        actions=[],
-    )
-
-
 def create_contact_dialog():
-    """Диалог выбора контакта с полем поиска — адаптивный под экран"""
+    """Диалог выбора/поиска контакта. Возвращает (dialog, contact_list, search_field, loading_container, result_container)."""
     search_field = ft.TextField(
         label="Поиск пользователя по номеру",
         prefix_icon=ft.Icons.SEARCH,
         border_radius=20,
     )
-
-    loading_ring = ft.ProgressRing(width=32, height=32, stroke_width=3, visible=False)
     loading_container = ft.Container(
-        content=loading_ring,
+        content=ft.ProgressRing(width=32, height=32, stroke_width=3, visible=False),
         alignment=ft.alignment.center,
         padding=ft.padding.symmetric(vertical=10),
         visible=False,
     )
-
     search_result_container = ft.Container(visible=False)
     contact_list = ft.Column(scroll=ft.ScrollMode.ADAPTIVE, spacing=2)
 
@@ -868,15 +530,9 @@ def create_contact_dialog():
         title=ft.Text("Выберите контакт для чата"),
         content=ft.Container(
             content=ft.Column(
-                controls=[
-                    search_field,
-                    loading_container,
-                    search_result_container,
-                    contact_list,
-                ],
+                [search_field, loading_container, search_result_container, contact_list],
                 spacing=10,
             ),
-            # Убираем жёсткие width/height — диалог сам подстраивается
             width=float("inf"),
             height=400,
             expand=True,
@@ -887,184 +543,128 @@ def create_contact_dialog():
     return dialog, contact_list, search_field, loading_container, search_result_container
 
 
+
 //app/components/handlers.py
-import os
 import threading
 import time
-from .database import (
-    load_chats, delete_chat_from_db, create_new_chat, save_contact_if_not_exists,
-    toggle_chat_favorite, is_chat_favorite, delete_user_and_contacts
-)
-import flet as ft
-import sqlite3 as sql
 import requests as http
-from .chat.chat_meneger import set_chat_id, set_status_chat
+import flet as ft
+
+from .database import (
+    load_chats, delete_chat, create_new_chat,
+    save_contact_if_not_exists, toggle_chat_favorite, delete_user_and_contacts,
+)
+from .ui_components import create_contact_item
+from .utils import format_phone
+from .chat.chat_manager import set_chat_id, set_status_chat
 
 
-def number_search_contact(number):
-    if len(number) == 11:
-        number = number[1:]
-    elif len(number) == 12:
-        number = number[2:]
-    data = {"number": number}
+def search_user_by_phone(number: str) -> dict | None:
+    """Поиск пользователя по номеру через сервер."""
+    digits = ''.join(filter(str.isdigit, str(number)))
+    if len(digits) == 11:
+        digits = digits[1:]
     try:
-        response = http.post(f"http://127.0.0.1:5000/search/v2/user/search_contacts/", json=data)
-        data_user = response.json()
-        return data_user
+        response = http.post(
+            "http://127.0.0.1:5000/search/v2/user/search_contacts/",
+            json={"number": digits}
+        )
+        return response.json()
     except Exception as ex:
         print(f"Ошибка поиска: {ex}")
         return None
 
 
-def _format_phone(number):
-    """Форматирует номер в вид +7 (XXX) XXX-XX-XX"""
-    if not number:
-        return ""
-    digits = ''.join(filter(str.isdigit, str(number)))
-    if len(digits) == 11:
-        digits = digits[1:]
-    if len(digits) == 10:
-        return f"+7 ({digits[0:3]}) {digits[3:6]}-{digits[6:8]}-{digits[8:10]}"
-    return str(number)
+def _soon_dialog(page: ft.Page) -> None:
+    dlg = ft.AlertDialog(
+        title=ft.Text("Скоро"),
+        content=ft.Text("Функция находится в разработке"),
+        actions=[ft.TextButton("OK", on_click=lambda e: (setattr(dlg, 'open', False), page.update()))],
+    )
+    page.dialog = dlg
+    dlg.open = True
+    page.update()
 
 
-def setup_handlers(page, db_path, contacts, chats, update_chats_list_func, update_contacts_tab_func):
+def _wip_dialog(page: ft.Page, title: str, text: str) -> None:
+    dlg = ft.AlertDialog(
+        modal=True,
+        title=ft.Text(title),
+        content=ft.Text(text),
+        actions=[ft.TextButton("OK", on_click=lambda e: (setattr(dlg, 'open', False), page.update()))],
+    )
+    page.overlay.append(dlg)
+    dlg.open = True
+    page.update()
 
-    # ─── ВЫХОД: удаляем пользователя + все контакты ───────────────────────────
+
+def setup_handlers(page, db_path, contacts, chats,
+                   update_chats_list_func, update_contacts_tab_func):
+
     def get_out(e):
         delete_user_and_contacts(db_path)
         page.go('/login')
         page.update()
 
-    def open_existing_chat(chat_id, status_chat=None):
-        if status_chat is None:
-            status_chat = 'existing_chat'
+    def open_existing_chat(chat_id, status_chat='existing_chat'):
         set_status_chat(status_chat)
         set_chat_id(chat_id)
         page.go('/chat')
 
-    def delete_chat_confirmation(chat_id, confirm_dialog):
-        chat_name = next((c["name"] for c in chats if c["id"] == chat_id), "")
-        confirm_dialog.content = ft.Text(f"Удалить чат '{chat_name}'?")
-        confirm_dialog.actions = [
-            ft.TextButton("Удалить", on_click=lambda e: delete_chat(chat_id, confirm_dialog)),
-            ft.TextButton("Отмена", on_click=lambda e: setattr(confirm_dialog, 'open', False) or page.update())
-        ]
-        page.dialog = confirm_dialog
-        confirm_dialog.open = True
-        page.update()
-
-    def delete_chat(chat_id, confirm_dialog):
-        if delete_chat_from_db(db_path, chat_id):
-            update_chats_list_func()
-            confirm_dialog.open = False
-            page.update()
-
-    # ─── МЕНЮ ТРЁХ ТОЧЕК У ЧАТА ───────────────────────────────────────────────
     def handle_chat_menu(chat_id, action, update_fn):
         if action == "delete":
-            confirm_dlg = ft.AlertDialog(
+            def _do_delete(e):
+                dlg.open = False
+                page.update()
+                if delete_chat(db_path, chat_id):
+                    update_fn()
+
+            dlg = ft.AlertDialog(
                 modal=True,
                 title=ft.Text("Удаление чата"),
                 content=ft.Text("Вы уверены, что хотите удалить этот чат?"),
-                actions=[],
+                actions=[
+                    ft.TextButton("Удалить", style=ft.ButtonStyle(color=ft.Colors.RED),
+                                  on_click=_do_delete),
+                    ft.TextButton("Отмена",
+                                  on_click=lambda e: (setattr(dlg, 'open', False), page.update())),
+                ],
             )
-
-            def _do_delete(e):
-                confirm_dlg.open = False
-                page.update()
-                if delete_chat_from_db(db_path, chat_id):
-                    update_fn()
-
-            def _cancel(e):
-                confirm_dlg.open = False
-                page.update()
-
-            confirm_dlg.actions = [
-                ft.TextButton("Удалить", style=ft.ButtonStyle(color=ft.Colors.RED), on_click=_do_delete),
-                ft.TextButton("Отмена", on_click=_cancel),
-            ]
-            page.overlay.append(confirm_dlg)
-            confirm_dlg.open = True
+            page.overlay.append(dlg)
+            dlg.open = True
             page.update()
 
         elif action == "favorite":
             toggle_chat_favorite(db_path, chat_id)
             update_fn()
-            page.update()
 
         elif action == "save_contact":
-            dlg = ft.AlertDialog(
-                modal=True,
-                title=ft.Text("В разработке"),
-                content=ft.Text("Сохранение контакта в БД будет добавлено позже"),
-                actions=[],
-            )
-            def _close_save(e):
-                dlg.open = False
-                page.update()
-            dlg.actions = [ft.TextButton("OK", on_click=_close_save)]
-            page.overlay.append(dlg)
-            dlg.open = True
-            page.update()
+            _wip_dialog(page, "В разработке", "Сохранение контакта будет добавлено позже")
 
         elif action == "edit_contact":
-            dlg = ft.AlertDialog(
-                modal=True,
-                title=ft.Text("В разработке"),
-                content=ft.Text("Редактирование контакта в БД будет добавлено позже"),
-                actions=[],
-            )
-            def _close_edit(e):
-                dlg.open = False
-                page.update()
-            dlg.actions = [ft.TextButton("OK", on_click=_close_edit)]
-            page.overlay.append(dlg)
-            dlg.open = True
-            page.update()
+            _wip_dialog(page, "В разработке", "Редактирование контакта будет добавлено позже")
 
-    def soon_popup(e):
-        dlg = ft.AlertDialog(
-            title=ft.Text("Скоро"),
-            content=ft.Text("Функция находится в разработке"),
-            actions=[ft.TextButton("OK", on_click=lambda e: setattr(dlg, 'open', False) or page.update())]
-        )
-        page.dialog = dlg
-        dlg.open = True
-        page.update()
-
-    def show_contact_selection(e, contact_dialog, contact_list, search_field, contacts,
-                               create_chat_with_contact_func,
+    def show_contact_selection(e, contact_dialog, contact_list, search_field,
+                               contacts, create_chat_func,
                                loading_container=None, search_result_container=None):
 
         def render_contacts(filter_text=""):
             contact_list.controls.clear()
-
-            # ─── Разделяем контакты на сохранённые и несохранённые ────────────
-            saved = [c for c in contacts if c.get("status_user_contact") == "save_user"]
+            saved    = [c for c in contacts if c.get("status_user_contact") != "not_save_user"]
             not_saved = [c for c in contacts if c.get("status_user_contact") == "not_save_user"]
-            # Контакты без явного статуса считаем сохранёнными
-            unknown = [c for c in contacts if c.get("status_user_contact") not in ("save_user", "not_save_user")]
-            saved = saved + unknown
 
             if filter_text:
-                saved = [c for c in saved if filter_text.lower() in c["username"].lower()]
-                not_saved_filtered = []
-                for c in not_saved:
-                    phone_fmt = _format_phone(c.get("phone", ""))
-                    if filter_text.lower() in c["username"].lower() or filter_text in phone_fmt:
-                        not_saved_filtered.append(c)
-                not_saved = not_saved_filtered
+                f = filter_text.lower()
+                saved     = [c for c in saved if f in c["username"].lower()]
+                not_saved = [c for c in not_saved
+                             if f in c["username"].lower() or f in format_phone(c.get("phone", ""))]
 
             if not saved and not not_saved:
                 contact_list.controls.append(
-                    ft.Container(
-                        content=ft.Text("Нет контактов", text_align=ft.TextAlign.CENTER),
-                        padding=20
-                    )
+                    ft.Container(content=ft.Text("Нет контактов", text_align=ft.TextAlign.CENTER),
+                                 padding=20)
                 )
             else:
-                # ── Раздел «Сохранённые» ──
                 if saved:
                     contact_list.controls.append(
                         ft.Container(
@@ -1073,17 +673,13 @@ def setup_handlers(page, db_path, contacts, chats, update_chats_list_func, updat
                             padding=ft.padding.only(left=10, top=8, bottom=4),
                         )
                     )
-                    for contact in saved:
-                        from .ui_components import create_contact_item
+                    for c in saved:
                         contact_list.controls.append(
                             create_contact_item(
-                                contact,
-                                lambda e, cid=contact["id"], cname=contact["username"]:
-                                    create_chat_with_contact_func(cid, cname)
+                                c,
+                                lambda e, cid=c["id"], cname=c["username"]: create_chat_func(cid, cname)
                             )
                         )
-
-                # ── Раздел «Не сохранённые» ──
                 if not_saved:
                     contact_list.controls.append(
                         ft.Container(
@@ -1092,40 +688,31 @@ def setup_handlers(page, db_path, contacts, chats, update_chats_list_func, updat
                             padding=ft.padding.only(left=10, top=12, bottom=4),
                         )
                     )
-                    for contact in not_saved:
-                        display_name = _format_phone(contact.get("phone", "")) or contact["username"]
-                        contact_copy = dict(contact)
-                        contact_copy["username"] = display_name
-                        from .ui_components import create_contact_item
+                    for c in not_saved:
+                        c_copy = dict(c)
+                        c_copy["username"] = format_phone(c.get("phone", "")) or c["username"]
                         contact_list.controls.append(
                             create_contact_item(
-                                contact_copy,
-                                lambda e, cid=contact["id"], cname=contact["username"]:
-                                    create_chat_with_contact_func(cid, cname)
+                                c_copy,
+                                lambda e, cid=c["id"], cname=c["username"]: create_chat_func(cid, cname)
                             )
                         )
 
-            search_result_container.content = None
-            search_result_container.visible = False
+            if search_result_container:
+                search_result_container.content = None
+                search_result_container.visible = False
             page.update()
-
-        def format_number(number):
-            return _format_phone(number)
 
         def show_search_result(data_user):
             if data_user and data_user.get("post") == 200:
-
                 def open_found_chat(e):
                     save_contact_if_not_exists(
                         db_path,
                         contact_id=data_user.get("id"),
                         username=data_user.get("login"),
-                        phone=data_user.get("number", "")
+                        phone=data_user.get("number", ""),
                     )
-                    create_chat_with_contact_func(
-                        data_user.get("id"),
-                        data_user.get("login")
-                    )
+                    create_chat_func(data_user.get("id"), data_user.get("login"))
 
                 card = ft.Container(
                     content=ft.ListTile(
@@ -1134,20 +721,11 @@ def setup_handlers(page, db_path, contacts, chats, update_chats_list_func, updat
                             width=50, height=50, border_radius=25,
                             bgcolor=ft.Colors.GREEN, alignment=ft.alignment.center,
                         ),
-                        title=ft.Text(
-                            data_user.get("login", ""),
-                            weight=ft.FontWeight.BOLD,
-                            size=16,
-                            overflow=ft.TextOverflow.ELLIPSIS,
-                            max_lines=1,
-                        ),
-                        subtitle=ft.Text(
-                            format_number(data_user.get("number", "")),
-                            size=14,
-                            color=ft.Colors.GREY,
-                            overflow=ft.TextOverflow.ELLIPSIS,
-                            max_lines=1,
-                        ),
+                        title=ft.Text(data_user.get("login", ""), weight=ft.FontWeight.BOLD,
+                                      size=16, overflow=ft.TextOverflow.ELLIPSIS, max_lines=1),
+                        subtitle=ft.Text(format_phone(data_user.get("number", "")),
+                                         size=14, color=ft.Colors.GREY,
+                                         overflow=ft.TextOverflow.ELLIPSIS, max_lines=1),
                         trailing=ft.Icon(ft.Icons.CHAT, color=ft.Colors.BLUE),
                         on_click=open_found_chat,
                     ),
@@ -1155,45 +733,40 @@ def setup_handlers(page, db_path, contacts, chats, update_chats_list_func, updat
                     border_radius=10,
                     on_click=open_found_chat,
                 )
-
                 search_result_container.content = card
-
             else:
                 search_result_container.content = ft.Container(
                     content=ft.Row(
-                        controls=[
-                            ft.Icon(ft.Icons.PERSON_OFF, color=ft.Colors.GREY_500, size=22),
-                            ft.Text("Пользователь не найден :(", color=ft.Colors.GREY_500, size=14),
-                        ],
+                        [ft.Icon(ft.Icons.PERSON_OFF, color=ft.Colors.GREY_500, size=22),
+                         ft.Text("Пользователь не найден :(", color=ft.Colors.GREY_500, size=14)],
                         spacing=8,
                     ),
                     padding=ft.padding.symmetric(horizontal=14, vertical=10),
                 )
-
             search_result_container.visible = True
             page.update()
 
         def on_search_change(e):
-            value = e.control.value.strip()
-            render_contacts(value)
+            render_contacts(e.control.value.strip())
 
         def on_search_submit(e):
             value = e.control.value.strip()
             if not value:
                 return
-
             contact_list.controls.clear()
-            search_result_container.content = None
-            search_result_container.visible = False
-
-            loading_container.visible = True
-            loading_container.content.visible = True
+            if search_result_container:
+                search_result_container.content = None
+                search_result_container.visible = False
+            if loading_container:
+                loading_container.visible = True
+                loading_container.content.visible = True
             page.update()
 
             def do_search():
                 time.sleep(1)
-                result = number_search_contact(value)
-                loading_container.visible = False
+                result = search_user_by_phone(value)
+                if loading_container:
+                    loading_container.visible = False
                 show_search_result(result)
 
             threading.Thread(target=do_search, daemon=True).start()
@@ -1204,18 +777,19 @@ def setup_handlers(page, db_path, contacts, chats, update_chats_list_func, updat
         render_contacts()
 
         contact_dialog.actions = [
-            ft.TextButton("Отмена", on_click=lambda e: setattr(contact_dialog, 'open', False) or page.update())
+            ft.TextButton("Отмена",
+                          on_click=lambda e: (setattr(contact_dialog, 'open', False), page.update()))
         ]
         contact_dialog.open = True
         page.update()
 
-    def create_chat_with_contact(contact_id, contact_name, update_chats_list_func, open_existing_chat_func, contact_dialog):
+    def create_chat_with_contact(contact_id, contact_name,
+                                 update_chats_list_func, open_existing_chat_func, contact_dialog):
         chat_id = create_new_chat(db_path, contact_id, contact_name)
         update_chats_list_func()
         contact_dialog.open = False
-        status_chat = 'new_chat'
         page.update()
-        open_existing_chat_func(chat_id, status_chat)
+        open_existing_chat_func(chat_id, 'new_chat')
 
     def close_dialog(e, dlg):
         dlg.open = False
@@ -1227,43 +801,27 @@ def setup_handlers(page, db_path, contacts, chats, update_chats_list_func, updat
         page.update()
 
     return {
-        'get_out': get_out,
-        'open_existing_chat': open_existing_chat,
-        'delete_chat_confirmation': delete_chat_confirmation,
-        'delete_chat': delete_chat,
-        'soon_popup': soon_popup,
-        'show_contact_selection': show_contact_selection,
-        'create_chat_with_contact': create_chat_with_contact,
-        'close_dialog': close_dialog,
-        'open_dialog': open_dialog,
-        'show_chat_context_menu': None,
-        'toggle_favorite': None,
-        'handle_chat_menu': handle_chat_menu,
+        'get_out':                   get_out,
+        'open_existing_chat':        open_existing_chat,
+        'handle_chat_menu':          handle_chat_menu,
+        'show_contact_selection':    show_contact_selection,
+        'create_chat_with_contact':  create_chat_with_contact,
+        'close_dialog':              close_dialog,
+        'open_dialog':               open_dialog,
+        'soon_popup':                lambda e: _soon_dialog(page),
     }
 
 
 //app/components/ui_components.py
 import flet as ft
-from .utils import get_avatar_letter, format_chat_time
+from .utils import get_avatar_letter, format_chat_time, format_phone
 
 
-def _format_phone(number):
-    if not number:
-        return ""
-    digits = ''.join(filter(str.isdigit, str(number)))
-    if len(digits) == 11:
-        digits = digits[1:]
-    if len(digits) == 10:
-        return f"+7 ({digits[0:3]}) {digits[3:6]}-{digits[6:8]}-{digits[8:10]}"
-    return str(number)
-
-
-def create_contact_item(contact, on_click_handler):
+def create_contact_item(contact: dict, on_click_handler) -> ft.Container:
     status = contact.get("status_user_contact", "save_user")
     if status == "not_save_user":
-        display_name = _format_phone(contact.get("phone", "")) or contact["username"]
-        avatar_letter = "#"
-        avatar_bg = ft.Colors.BLUE_GREY
+        display_name = format_phone(contact.get("phone", "")) or contact["username"]
+        avatar_letter, avatar_bg = "#", ft.Colors.BLUE_GREY
     else:
         display_name = contact["username"]
         avatar_letter = get_avatar_letter(contact["username"])
@@ -1272,7 +830,8 @@ def create_contact_item(contact, on_click_handler):
     return ft.Container(
         content=ft.ListTile(
             leading=ft.Container(
-                content=ft.Text(avatar_letter, size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
+                content=ft.Text(avatar_letter, size=16, weight=ft.FontWeight.BOLD,
+                                color=ft.Colors.WHITE),
                 width=50, height=50, border_radius=25,
                 bgcolor=avatar_bg, alignment=ft.alignment.center,
             ),
@@ -1289,58 +848,54 @@ def create_contact_item(contact, on_click_handler):
     )
 
 
-def create_chat_item(chat, on_click_handler, on_menu_handler=None, contact_status="save_user"):
-    """
-    Создаёт элемент чата с кнопкой ⋮ в конце.
-    contact_status: 'save_user' или 'not_save_user' — влияет на пункты меню.
-    on_menu_handler(chat_id, action) где action: 'delete' | 'favorite' | 'save_contact' | 'edit_contact'
-    """
-    avatar_letter = get_avatar_letter(chat["name"])
-    is_favorite = chat.get("is_favorite", False)
-    chat_id = chat["id"]
+def create_chat_item(chat: dict, on_click_handler, on_menu_handler=None,
+                     contact_status="save_user") -> ft.Container:
+    """Элемент чата с меню ⋮."""
+    chat_id    = chat["id"]
+    is_fav     = chat.get("is_favorite", False)
+    fav_label  = "Убрать из избранного" if is_fav else "Добавить в избранное"
+    fav_icon   = ft.Icons.STAR_OUTLINE if is_fav else ft.Icons.STAR
 
-    # Время + бейдж непрочитанных
     time_badge = ft.Column(
         controls=[
             ft.Text(format_chat_time(chat["last_time"]), size=12, color=ft.Colors.GREY),
-            *([ ft.Icon(ft.Icons.STAR, color=ft.Colors.AMBER, size=14) ] if is_favorite else []),
+            *([ ft.Icon(ft.Icons.STAR, color=ft.Colors.AMBER, size=14) ] if is_fav else []),
             *([ ft.Container(
                 content=ft.Text(str(chat["unread"]), color=ft.Colors.WHITE, size=12,
                                 weight=ft.FontWeight.BOLD),
-                bgcolor=ft.Colors.GREEN, border_radius=20, padding=ft.padding.all(5),
+                bgcolor=ft.Colors.GREEN, border_radius=20,
+                padding=ft.padding.all(5),
             ) ] if chat["unread"] > 0 else []),
         ],
         horizontal_alignment=ft.CrossAxisAlignment.END,
         spacing=3,
     )
 
-    # Пункты меню зависят от статуса контакта
-    favorite_label = "Убрать из избранного" if is_favorite else "Добавить в избранное"
-    favorite_icon = ft.Icons.STAR_OUTLINE if is_favorite else ft.Icons.STAR
-
-    if contact_status == "not_save_user":
-        contact_menu_item = ft.PopupMenuItem(
+    contact_item = (
+        ft.PopupMenuItem(
             content=ft.Row([ft.Icon(ft.Icons.PERSON_ADD, size=18), ft.Text("Сохранить контакт")], spacing=8),
             on_click=lambda e: on_menu_handler(chat_id, "save_contact") if on_menu_handler else None,
-        )
-    else:
-        contact_menu_item = ft.PopupMenuItem(
+        ) if contact_status == "not_save_user" else
+        ft.PopupMenuItem(
             content=ft.Row([ft.Icon(ft.Icons.EDIT, size=18), ft.Text("Изменить контакт")], spacing=8),
             on_click=lambda e: on_menu_handler(chat_id, "edit_contact") if on_menu_handler else None,
         )
+    )
 
-    menu_button = ft.PopupMenuButton(
+    menu = ft.PopupMenuButton(
         icon=ft.Icons.MORE_VERT,
         icon_color=ft.Colors.ON_SURFACE,
         items=[
             ft.PopupMenuItem(
-                content=ft.Row([ft.Icon(favorite_icon, size=18, color=ft.Colors.AMBER), ft.Text(favorite_label)], spacing=8),
+                content=ft.Row([ft.Icon(fav_icon, size=18, color=ft.Colors.AMBER),
+                                ft.Text(fav_label)], spacing=8),
                 on_click=lambda e: on_menu_handler(chat_id, "favorite") if on_menu_handler else None,
             ),
-            contact_menu_item,
+            contact_item,
             ft.PopupMenuItem(),
             ft.PopupMenuItem(
-                content=ft.Row([ft.Icon(ft.Icons.DELETE_OUTLINE, size=18, color=ft.Colors.RED), ft.Text("Удалить чат", color=ft.Colors.RED)], spacing=8),
+                content=ft.Row([ft.Icon(ft.Icons.DELETE_OUTLINE, size=18, color=ft.Colors.RED),
+                                ft.Text("Удалить чат", color=ft.Colors.RED)], spacing=8),
                 on_click=lambda e: on_menu_handler(chat_id, "delete") if on_menu_handler else None,
             ),
         ],
@@ -1351,19 +906,21 @@ def create_chat_item(chat, on_click_handler, on_menu_handler=None, contact_statu
             controls=[
                 ft.ListTile(
                     leading=ft.Container(
-                        content=ft.Text(avatar_letter, size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
+                        content=ft.Text(get_avatar_letter(chat["name"]), size=16,
+                                        weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
                         width=50, height=50, border_radius=25,
                         bgcolor=ft.Colors.BLUE, alignment=ft.alignment.center,
                     ),
                     title=ft.Text(chat["name"], weight=ft.FontWeight.BOLD, size=16,
                                   overflow=ft.TextOverflow.ELLIPSIS, max_lines=1),
-                    subtitle=ft.Text(chat["last_message"] or "Нет сообщений", size=14, color=ft.Colors.GREY,
+                    subtitle=ft.Text(chat["last_message"] or "Нет сообщений",
+                                     size=14, color=ft.Colors.GREY,
                                      overflow=ft.TextOverflow.ELLIPSIS, max_lines=1),
                     trailing=time_badge,
                     on_click=lambda e: on_click_handler(chat_id),
                     expand=True,
                 ),
-                menu_button,
+                menu,
             ],
             spacing=0,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -1372,1544 +929,3 @@ def create_chat_item(chat, on_click_handler, on_menu_handler=None, contact_statu
         border_radius=10,
         ink=True,
     )
-
-
-
-//app/components/utils.py
-from datetime import datetime
-
-def format_chat_time(time_string):
-    """Форматирование времени для отображения в списке чатов"""
-    if not time_string:
-        return ""
-    
-    try:
-        if '.' in time_string:
-            dt = datetime.strptime(time_string, '%Y-%m-%d %H:%M:%S.%f')
-        else:
-            dt = datetime.strptime(time_string, '%Y-%m-%d %H:%M:%S')
-        return dt.strftime('%H:%M')
-    except ValueError:
-        return ""
-
-def get_avatar_letter(name):
-    """Преобразует первую букву имени в английскую для аватара"""
-    if not name or len(name) == 0:
-        return "U"
-    
-    first_char = name[0].upper()
-    cyr_to_lat = {
-        'А': 'A', 'Б': 'B', 'В': 'V', 'Г': 'G', 'Д': 'D',
-        'Е': 'E', 'Ё': 'E', 'Ж': 'Z', 'З': 'Z', 'И': 'I',
-        'Й': 'I', 'К': 'K', 'Л': 'L', 'М': 'M', 'Н': 'N',
-        'О': 'O', 'П': 'P', 'Р': 'R', 'С': 'S', 'Т': 'T',
-        'У': 'U', 'Ф': 'F', 'Х': 'H', 'Ц': 'C', 'Ч': 'C',
-        'Ш': 'S', 'Щ': 'S', 'Ъ': '', 'Ы': 'Y', 'Ь': '',
-        'Э': 'E', 'Ю': 'U', 'Я': 'Y',
-        'A': 'A', 'B': 'B', 'C': 'C', 'D': 'D', 'E': 'E',
-        'F': 'F', 'G': 'G', 'H': 'H', 'I': 'I', 'J': 'J',
-        'K': 'K', 'L': 'L', 'M': 'M', 'N': 'N', 'O': 'O',
-        'P': 'P', 'Q': 'Q', 'R': 'R', 'S': 'S', 'T': 'T',
-        'U': 'U', 'V': 'V', 'W': 'W', 'X': 'X', 'Y': 'Y', 'Z': 'Z'
-    }
-    return cyr_to_lat.get(first_char, 'U')
-
-
-
-
-//app/components/chat/chat_connection.py
-import json
-import base64
-import threading
-import queue
-import websocket
-from .geniration_token import GuaranteedUniqueTokenGenerator
-
-# ─────────────────────────── Генирация Токена и Комнаты ───────────────────────
-
-geniration = GuaranteedUniqueTokenGenerator()
-token = geniration.generate_token(90)
-#token = '65'
-lobbi = geniration.generate_token(90)
-
-# ─────────────────────────── Константы ────────────────────────────────────────
-
-WS_URL_DATA    = "ws://127.0.0.1:5000/ws/data/"
-WS_URL_CHAT    = f"ws://127.0.0.1:5000/ws/chat_user/{token}/"
-WS_URL_NEW_CHAT    = f"ws://127.0.0.1:5000/ws/new_chat_user/{token}/"
-FILE_SEPARATOR = b"|||BINARY_DATA|||"
-lobbi_time = "lobbi"
-
-# ─────────────────────────── Состояние соединения ─────────────────────────────
-
-message_queue: queue.Queue = queue.Queue()
-ws: websocket.WebSocket | None = None
-running = True
-
-
-def authenticate(my_id: str, contact_id: str, status_chat: str):
-    """Регистрирует чат-комнату на сервере."""
-    try:
-        if my_id == "None" and contact_id == "None":
-            print("Данных нет")
-        else:
-            conn = websocket.WebSocket()
-            conn.connect(WS_URL_DATA)
-            conn.send(json.dumps({
-                "room":lobbi_time if status_chat == 'existing_chat' else lobbi,
-                "user_id":my_id,
-                "guest_id":contact_id,
-                "status_chat":status_chat,
-                "token": token,
-            }))
-            conn.close()
-    except Exception:
-        pass
-
-
-def receive_messages():
-    """Фоновый поток: читает сообщения из WebSocket и кладёт в очередь."""
-    global running
-    while running:
-        try:
-            raw = ws.recv()
-
-            # Текстовые данные — JSON-сообщение
-            if isinstance(raw, str):
-                message_queue.put(json.loads(raw))
-
-            # Бинарные данные — файл: метаданные + разделитель + байты файла
-            elif isinstance(raw, bytes):
-                sep_pos = raw.find(FILE_SEPARATOR)
-                if sep_pos == -1:
-                    print("❌ Не найден разделитель в бинарных данных")
-                    continue
-                metadata   = json.loads(raw[:sep_pos].decode("utf-8"))
-                file_bytes = raw[sep_pos + len(FILE_SEPARATOR):]
-                message_queue.put({
-                    "type":      "file",
-                    "file_name": metadata.get("file_name", "unknown"),
-                    "file_type": metadata.get("file_type", "unknown"),
-                    "file_size": metadata.get("file_size", len(file_bytes)),
-                    "file_data": base64.b64encode(file_bytes).decode("utf-8"),
-                    "sender_id": metadata.get("sender_id"),
-                })
-        except websocket.WebSocketConnectionClosedException:
-            print("❌ WebSocket соединение закрыто")
-            break
-        except Exception as e:
-            import traceback
-            print(f"❌ Ошибка получения сообщения: {e}")
-            traceback.print_exc()
-            break
-
-
-def start_connection(my_id: str, contact_id: str, status_chat: str):
-    """Инициализирует аутентификацию, открывает WS и запускает фоновый поток."""
-    global ws
-    try:
-        authenticate(my_id, contact_id, status_chat)
-        ws = websocket.WebSocket()
-        if status_chat == 'new_chat':
-            ws.connect(WS_URL_NEW_CHAT)
-        else:
-            ws.connect(WS_URL_CHAT)
-        threading.Thread(target=receive_messages, daemon=True).start()
-        #print(f"Соединение установлено (симуляция)")
-    except Exception:
-        pass
-
-
-def send_text(payload: dict):
-    """Отправляет JSON-сообщение через WebSocket."""
-    if ws:
-        ws.send(json.dumps(payload))
-
-
-def send_binary(data: bytes):
-    """Отправляет бинарные данные через WebSocket."""
-    if ws:
-        ws.send_binary(data)
-
-
-
-
-
-//app/components/chat/chat_db.py
-import sqlite3 as sql
-import path  # ваш модуль с путями
-
-db_path = f"{path.db_path()}user_data.db"
-
-
-def db_user_data(id):
-    """Возвращает данные пользователя по user_id из таблицы contacts."""
-    with sql.connect(db_path) as con:
-        cur_data = con.cursor()
-        cur_data.execute("SELECT * FROM contacts WHERE user_id = ?", (id,))
-        result = cur_data.fetchone()
-        return result
-    
-def db_user():
-    with sql.connect(db_path) as con:
-        cur_data = con.cursor()
-        cur_data.execute("SELECT id_user FROM users_data")
-        result = cur_data.fetchone()
-        return result
-
-
-
-
-
-//app/components/chat/chat_meneger.py
-_chat_id = None
-def set_chat_id(value):
-    global _chat_id
-    _chat_id = value
-    return _chat_id
-
-def get_chat_id():
-    global _chat_id
-    return _chat_id
-
-
-_status_chat = None
-def set_status_chat(value):
-    global _status_chat
-    _status_chat = value
-    return _status_chat
-
-def get_status_chat():
-    global _status_chat
-    return _status_chat
-
-
-
-//app/components/chat/chat_ui.py
-import flet as ft
-import datetime
-import os
-import shutil
-import json
-import time
-import base64
-import threading
-import queue
-
-from . import chat_connection as conn
-from .chat_connection import FILE_SEPARATOR
-
-# ─────────────────────────── Константы ────────────────────────────────────────
-
-INCOMING_FOLDER = "assets/data.media/incoming_files"
-ASSETS_FOLDER   = "assets/data.media/assets"
-VOICE_FOLDER    = "assets/data.media/voice_recordings"
-SETTINGS_FILE   = "chat_settings.json"
-MAX_FILE_SIZE   = 50 * 1024 * 1024  # 50 МБ
-
-IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
-VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".webm"}
-AUDIO_EXTS = {".mp3", ".wav", ".ogg", ".m4a"}
-
-for folder in (INCOMING_FOLDER, ASSETS_FOLDER, VOICE_FOLDER):
-    os.makedirs(folder, exist_ok=True)
-
-
-# ─────────────────────────── Утилиты ──────────────────────────────────────────
-
-def get_file_ext(filename: str) -> str:
-    return os.path.splitext(filename)[1].lower()
-
-
-def get_file_type(filename: str) -> str:
-    ext = get_file_ext(filename)
-    if ext in IMAGE_EXTS: return "image"
-    if ext in VIDEO_EXTS: return "video"
-    if ext in AUDIO_EXTS: return "audio"
-    return "document"
-
-
-def format_file_size(path: str) -> str:
-    try:
-        size = os.path.getsize(path)
-        if size < 1024:        return f"{size} Б"
-        if size < 1024 * 1024: return f"{size / 1024:.1f} КБ"
-        return f"{size / (1024 * 1024):.1f} МБ"
-    except Exception:
-        return "?"
-
-
-def format_time_seconds(seconds: float) -> str:
-    return f"{int(seconds // 60)}:{int(seconds % 60):02d}"
-
-
-def now_hm() -> str:
-    return datetime.datetime.now().strftime("%H:%M")
-
-
-# ─────────────────────────── Класс UI чата ────────────────────────────────────
-
-class ChatUI:
-    """
-    Содержит всю логику интерфейса чата.
-    Создаётся один раз внутри chat_view() и хранит все состояния.
-    """
-
-    def __init__(self, page: ft.Page, current_user: dict, contact_user: dict):
-        self.page         = page
-        self.CURRENT_USER = current_user
-        self.CONTACT_USER = contact_user
-
-        # Списки сообщений
-        self.messages_column  = ft.Column(scroll=ft.ScrollMode.ALWAYS, expand=True)
-        self.all_messages:     list = []
-        self.sent_media_files: list = []
-        self.viewed_once_ids:  list = []
-
-        # Mutable-обёртки состояний
-        self.reply_to          = [None]   # текст цитируемого сообщения
-        self.is_blocked        = [False]
-        self.auto_save_folder  = [None]
-        self.recording_start   = [None]
-
-        # Загружаем настройки
-        self._load_settings()
-
-        # Строим UI-элементы
-        self._build_reply_bar()
-        self._build_voice_panel()
-        self._build_input_bar()
-        self._build_header()
-
-    # ── Настройки ──────────────────────────────────────────────────────────────
-
-    def _load_settings(self):
-        try:
-            if os.path.exists(SETTINGS_FILE):
-                with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    self.auto_save_folder[0] = data.get("auto_download_folder")
-        except Exception:
-            pass
-
-    def _save_settings(self):
-        try:
-            with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-                json.dump({"auto_download_folder": self.auto_save_folder[0]}, f, ensure_ascii=False)
-        except Exception:
-            pass
-
-    # ── Общие UI-утилиты ───────────────────────────────────────────────────────
-
-    def make_avatar(self, user_data: dict, size: int = 40) -> ft.CircleAvatar:
-        letter = (user_data.get("name") or "?")[0].upper()
-        return ft.CircleAvatar(
-            content=ft.Text(letter, size=size // 2),
-            bgcolor=user_data.get("avatar_color", ft.Colors.GREY),
-            radius=size // 2,
-        )
-
-    def show_snack(self, text: str):
-        self.page.open(ft.SnackBar(content=ft.Text(text), duration=2000))
-        self.page.update()
-
-    def scroll_to_bottom(self):
-        self.messages_column.scroll_to(offset=-1, duration=300)
-
-    def add_message_to_chat(self, widget):
-        self.messages_column.controls.append(widget)
-        self.all_messages.append(widget)
-        self.scroll_to_bottom()
-        self.page.update()
-
-    # ── Панель ответа ──────────────────────────────────────────────────────────
-
-    def _build_reply_bar(self):
-        self.reply_preview_text = ft.Text(
-            "", size=12, color=ft.Colors.GREY_700,
-            max_lines=1, overflow=ft.TextOverflow.ELLIPSIS,
-        )
-        self.reply_bar = ft.Container(
-            visible=False,
-            content=ft.Row(
-                [
-                    ft.Icon(ft.Icons.REPLY, color=ft.Colors.BLUE, size=18),
-                    ft.Column(
-                        [
-                            ft.Text("Ответ на:", size=11, color=ft.Colors.BLUE,
-                                    weight=ft.FontWeight.BOLD),
-                            self.reply_preview_text,
-                        ],
-                        spacing=0, expand=True,
-                    ),
-                    ft.IconButton(
-                        icon=ft.Icons.CLOSE, icon_size=16, icon_color=ft.Colors.GREY,
-                        tooltip="Отменить ответ",
-                        on_click=lambda e: self.cancel_reply(),
-                    ),
-                ],
-                spacing=8,
-            ),
-            bgcolor=ft.Colors.BLUE_50,
-            padding=ft.padding.symmetric(horizontal=12, vertical=6),
-            border=ft.border.only(left=ft.border.BorderSide(3, ft.Colors.BLUE)),
-        )
-
-    def cancel_reply(self):
-        self.reply_to[0] = None
-        self.reply_bar.visible = False
-        self.reply_bar.update()
-
-    def set_reply(self, text: str):
-        self.reply_to[0] = text
-        short = text if len(text) <= 60 else text[:57] + "..."
-        self.reply_preview_text.value = short
-        self.reply_bar.visible = True
-        self.reply_bar.update()
-        self.message_input.focus()
-        self.message_input.update()
-
-    def _apply_block_state(self):
-        pass  # Блокировка только входящих — поле ввода остаётся активным
-
-    # ── Файловые операции ──────────────────────────────────────────────────────
-
-    def auto_save_file(self, src: str, filename: str) -> str:
-        folder = self.auto_save_folder[0]
-        if not folder or not os.path.exists(folder):
-            return src
-        dest    = os.path.join(folder, filename)
-        counter = 1
-        while os.path.exists(dest):
-            name, ext = os.path.splitext(filename)
-            dest = os.path.join(folder, f"{name}_{counter}{ext}")
-            counter += 1
-        try:
-            shutil.copy2(src, dest)
-            return dest
-        except Exception as e:
-            print(f"❌ Ошибка автосохранения: {e}")
-            return src
-
-    def download_file(self, file_path: str, file_name: str):
-        def on_save(e: ft.FilePickerResultEvent):
-            if e.path:
-                try:
-                    shutil.copy2(file_path, e.path)
-                    self.show_snack(f"Файл сохранён: {e.path}")
-                except Exception as ex:
-                    self.show_snack(f"Ошибка сохранения: {ex}")
-
-        picker = ft.FilePicker(on_result=on_save)
-        self.page.overlay.append(picker)
-        self.page.update()
-        picker.save_file(file_name=file_name, dialog_title="Сохранить файл как")
-
-    def select_auto_save_folder(self, e):
-        def on_folder_picked(e: ft.FilePickerResultEvent):
-            if e.path:
-                self.auto_save_folder[0] = e.path
-                self._save_settings()
-                self.show_snack(f"Папка для сохранения: {e.path}")
-
-        picker = ft.FilePicker(on_result=on_folder_picked)
-        self.page.overlay.append(picker)
-        self.page.update()
-        picker.get_directory_path(dialog_title="Выберите папку для автосохранения")
-
-    # ── Диалоги просмотра ──────────────────────────────────────────────────────
-
-    def open_image_fullscreen(self, image_path: str, file_name: str):
-        def close(e): self.page.close(dlg)
-        dlg = ft.AlertDialog(
-            content=ft.Container(
-                content=ft.Column(
-                    [
-                        ft.Image(src=image_path, fit=ft.ImageFit.CONTAIN),
-                        ft.Text(file_name, size=14, weight=ft.FontWeight.BOLD),
-                    ],
-                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                ),
-                width=600, height=650,
-            ),
-            actions=[
-                ft.TextButton("📥 Скачать", on_click=lambda e: self.download_file(image_path, file_name)),
-                ft.TextButton("Закрыть", on_click=close),
-            ],
-        )
-        self.page.open(dlg)
-
-    def open_video_viewer(self, video_path: str, file_name: str):
-        def close(e): self.page.close(dlg)
-        dlg = ft.AlertDialog(
-            content=ft.Container(
-                content=ft.Column(
-                    [
-                        ft.Video(
-                            playlist=[ft.VideoMedia(video_path)],
-                            width=600, height=400, show_controls=True,
-                        ),
-                        ft.Text(file_name, size=14, weight=ft.FontWeight.BOLD),
-                    ],
-                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                ),
-                width=600,
-            ),
-            actions=[
-                ft.TextButton("📥 Скачать", on_click=lambda e: self.download_file(video_path, file_name)),
-                ft.TextButton("Закрыть", on_click=close),
-            ],
-        )
-        self.page.open(dlg)
-
-    # ── Контекстное меню сообщения ─────────────────────────────────────────────
-
-    def show_message_menu(self, msg_widget, text: str, is_user: bool,
-                          msg_text_ref=None, edited_tag=None, current_text=None):
-        def close(e): self.page.close(dlg)
-
-        def copy(e):
-            self.page.set_clipboard(text)
-            self.show_snack("📋 Скопировано!")
-            self.page.close(dlg)
-
-        def delete(e):
-            self.delete_message(msg_widget, text)
-            self.page.close(dlg)
-
-        def reply(e):
-            self.set_reply(text)
-            self.page.close(dlg)
-
-        def edit(e):
-            self.page.close(dlg)
-            edit_field = ft.TextField(
-                value=current_text[0],
-                multiline=True, min_lines=1, max_lines=5,
-                expand=True, autofocus=True,
-            )
-
-            def confirm_edit(e):
-                new_text = edit_field.value.strip()
-                if not new_text or new_text == current_text[0]:
-                    self.page.close(edit_dlg)
-                    return
-                current_text[0]            = new_text
-                msg_text_ref.current.value = new_text
-                edited_tag.value           = "изменено"
-                msg_text_ref.current.update()
-                edited_tag.update()
-                try:
-                    conn.send_text({
-                        "type":       "edit",
-                        "message":    new_text,
-                        "sender_id":  self.CURRENT_USER["id"],
-                        "timestamp":  datetime.datetime.now().timestamp(),
-                    })
-                except Exception as ex:
-                    print(f"❌ Ошибка отправки правки: {ex}")
-                self.page.close(edit_dlg)
-                self.show_snack("✏️ Сообщение изменено")
-
-            edit_dlg = ft.AlertDialog(
-                title=ft.Text("Редактировать сообщение"),
-                content=ft.Container(content=edit_field, width=320),
-                actions=[
-                    ft.TextButton("Отмена",    on_click=lambda e: self.page.close(edit_dlg)),
-                    ft.TextButton("Сохранить", on_click=confirm_edit,
-                                  style=ft.ButtonStyle(color=ft.Colors.BLUE)),
-                ],
-            )
-            self.page.open(edit_dlg)
-
-        items = [
-            ft.TextButton("↩ Ответить",   on_click=reply),
-            ft.TextButton("📋 Копировать", on_click=copy),
-        ]
-        if is_user:
-            items.append(ft.TextButton("✏️ Редактировать", on_click=edit))
-            items.append(ft.TextButton("🗑️ Удалить",      on_click=delete))
-
-        dlg = ft.AlertDialog(
-            title=ft.Text("Действия"),
-            content=ft.Column(items, tight=True),
-            actions=[ft.TextButton("Закрыть", on_click=close)],
-        )
-        self.page.open(dlg)
-
-    def delete_message(self, widget, text: str = ""):
-        if widget not in self.messages_column.controls:
-            return
-        try:
-            msg_id = f"msg_{datetime.datetime.now().timestamp()}_{hash(text)}"
-            self.send_delete_command(msg_id, text)
-            self.messages_column.controls.remove(widget)
-            if widget in self.all_messages:
-                self.all_messages.remove(widget)
-            self.messages_column.update()
-            self.show_snack("✅ Сообщение удалено у всех")
-        except Exception as e:
-            print(f"❌ Ошибка удаления: {e}")
-
-    # ── Стили пузырей ──────────────────────────────────────────────────────────
-
-    def make_message_row(self, bubble, is_user: bool, user_data: dict) -> ft.Row:
-        avatar = self.make_avatar(user_data)
-        spacer = ft.Container(expand=True)
-        if is_user:
-            return ft.Row([spacer, bubble, avatar], vertical_alignment=ft.CrossAxisAlignment.START)
-        else:
-            return ft.Row([avatar, bubble, spacer], vertical_alignment=ft.CrossAxisAlignment.START)
-
-    def make_bubble_colors(self, is_user: bool):
-        return ft.Colors.BLUE if is_user else ft.Colors.GREY
-
-    def make_bubble_colors_dark(self, is_user: bool):
-        return ft.Colors.BLUE_700 if is_user else ft.Colors.GREY_700
-
-    def make_bubble_margin(self, is_user: bool):
-        return ft.margin.only(right=10) if is_user else ft.margin.only(left=10)
-
-    # ── Создание пузырей ───────────────────────────────────────────────────────
-
-    def create_text_message(self, text: str, is_user: bool = True,
-                            quote: str | None = None) -> ft.GestureDetector:
-        user_data      = self.CURRENT_USER if is_user else self.CONTACT_USER
-        bubble_children = []
-
-        if quote:
-            short_quote = quote if len(quote) <= 60 else quote[:57] + "..."
-            bubble_children.append(
-                ft.Container(
-                    content=ft.Column(
-                        [
-                            ft.Text("↩ Ответ на:", size=10, color=ft.Colors.WHITE70,
-                                    weight=ft.FontWeight.BOLD),
-                            ft.Text(short_quote, size=12, color=ft.Colors.WHITE70,
-                                    italic=True, max_lines=2, overflow=ft.TextOverflow.ELLIPSIS),
-                        ],
-                        tight=True, spacing=1,
-                    ),
-                    bgcolor=ft.Colors.with_opacity(0.2, ft.Colors.BLACK),
-                    padding=ft.padding.symmetric(horizontal=8, vertical=4),
-                    border_radius=8,
-                    border=ft.border.only(left=ft.border.BorderSide(3, ft.Colors.WHITE70)),
-                )
-            )
-
-        msg_text_ref = ft.Ref[ft.Text]()
-        edited_tag   = ft.Text("", size=10, color=ft.Colors.WHITE54, italic=True)
-        current_text = [text]
-
-        bubble_children += [
-            ft.Text(text, color=ft.Colors.WHITE, ref=msg_text_ref),
-            ft.Row(
-                [
-                    edited_tag,
-                    ft.Container(expand=True),
-                    ft.Text(now_hm(), size=12, color=ft.Colors.WHITE54),
-                ],
-                spacing=0,
-            ),
-        ]
-
-        bubble = ft.Container(
-            content=ft.Column(bubble_children, tight=True, spacing=4),
-            bgcolor=self.make_bubble_colors(is_user),
-            padding=10,
-            border_radius=15,
-            margin=self.make_bubble_margin(is_user),
-        )
-        row = self.make_message_row(bubble, is_user, user_data)
-
-        def open_menu(e):
-            self.show_message_menu(
-                widget, current_text[0], is_user,
-                msg_text_ref=msg_text_ref,
-                edited_tag=edited_tag,
-                current_text=current_text,
-            )
-
-        widget = ft.GestureDetector(
-            content=row,
-            on_tap=open_menu,
-            on_long_press_start=open_menu,
-        )
-        return widget
-
-    def create_image_message(self, image_path: str, file_name: str,
-                             is_user: bool = True,
-                             one_time_view: bool = False) -> ft.GestureDetector:
-        user_data  = self.CURRENT_USER if is_user else self.CONTACT_USER
-        message_id = f"img_{datetime.datetime.now().timestamp()}"
-        is_viewed  = [message_id in self.viewed_once_ids]
-
-        def build_viewed_placeholder():
-            return ft.Column(
-                [
-                    ft.Icon(ft.Icons.VISIBILITY_OFF, size=80, color=ft.Colors.WHITE54),
-                    ft.Text("Просмотрено", size=16, color=ft.Colors.WHITE,
-                            weight=ft.FontWeight.BOLD),
-                    ft.Text(now_hm(), size=12, color=ft.Colors.WHITE54),
-                ],
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=10,
-            )
-
-        def on_tap(e):
-            if one_time_view:
-                if is_viewed[0]:
-                    self.show_snack("❌ Сообщение уже было просмотрено")
-                    return
-                self.viewed_once_ids.append(message_id)
-                is_viewed[0] = True
-
-                def close_and_replace(e):
-                    self.page.close(dlg)
-                    image_container.content = build_viewed_placeholder()
-                    image_container.update()
-
-                dlg = ft.AlertDialog(
-                    content=ft.Container(
-                        content=ft.Column(
-                            [
-                                ft.Image(src=image_path, fit=ft.ImageFit.CONTAIN),
-                                ft.Text("⚠️ Одноразовый просмотр", size=14,
-                                        weight=ft.FontWeight.BOLD, color=ft.Colors.RED),
-                            ],
-                            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                        ),
-                        width=600, height=650,
-                    ),
-                    actions=[ft.TextButton("Закрыть", on_click=close_and_replace)],
-                )
-                self.page.open(dlg)
-            else:
-                self.open_image_fullscreen(image_path, file_name)
-
-        if one_time_view and is_viewed[0]:
-            bubble_content = build_viewed_placeholder()
-        else:
-            eye_overlay = ft.Container(
-                content=ft.Icon(ft.Icons.VISIBILITY, color=ft.Colors.WHITE, size=30),
-                alignment=ft.alignment.center,
-                width=200, height=200,
-            ) if one_time_view else ft.Container()
-
-            bubble_content = ft.Column(
-                [
-                    ft.Stack([
-                        ft.Image(src=image_path, width=200, height=200,
-                                 fit=ft.ImageFit.COVER, border_radius=10),
-                        eye_overlay,
-                    ]),
-                    ft.Row(
-                        [
-                            ft.Icon(ft.Icons.TIMER_OUTLINED, color=ft.Colors.WHITE, size=16)
-                            if one_time_view else ft.Container(),
-                            ft.Text(
-                                "Одноразовое фото" if one_time_view else file_name,
-                                size=12, color=ft.Colors.WHITE,
-                                max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, expand=True,
-                            ),
-                            ft.IconButton(
-                                icon=ft.Icons.DOWNLOAD, icon_color=ft.Colors.WHITE,
-                                icon_size=16, tooltip="Скачать",
-                                on_click=lambda e: self.download_file(image_path, file_name),
-                            ) if not one_time_view else ft.Container(),
-                        ],
-                        spacing=5,
-                    ),
-                    ft.Text(now_hm(), size=12, color=ft.Colors.WHITE54),
-                ],
-                tight=True, spacing=5,
-            )
-
-        image_container = ft.Container(
-            content=bubble_content,
-            bgcolor=self.make_bubble_colors_dark(is_user),
-            padding=10, border_radius=15,
-            margin=self.make_bubble_margin(is_user),
-        )
-        row    = self.make_message_row(image_container, is_user, user_data)
-        widget = ft.GestureDetector(
-            content=row,
-            on_tap=on_tap,
-            on_long_press_start=lambda e: self.show_message_menu(widget, "📷 Фото", is_user),
-        )
-        return widget
-
-    def create_video_message(self, video_path: str, file_name: str,
-                             is_user: bool = True) -> ft.GestureDetector:
-        user_data = self.CURRENT_USER if is_user else self.CONTACT_USER
-        bubble = ft.Container(
-            content=ft.Column(
-                [
-                    ft.Stack([
-                        ft.Container(width=200, height=150,
-                                     bgcolor=ft.Colors.BLACK54, border_radius=10),
-                        ft.Container(
-                            content=ft.Icon(ft.Icons.PLAY_CIRCLE_FILLED,
-                                            color=ft.Colors.WHITE, size=60),
-                            alignment=ft.alignment.center,
-                            width=200, height=150,
-                        ),
-                    ]),
-                    ft.Row(
-                        [
-                            ft.Text("Видео", size=12, color=ft.Colors.WHITE,
-                                    max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, expand=True),
-                            ft.IconButton(
-                                icon=ft.Icons.DOWNLOAD, icon_color=ft.Colors.WHITE,
-                                icon_size=16, tooltip="Скачать",
-                                on_click=lambda e: self.download_file(video_path, file_name),
-                            ),
-                        ],
-                        spacing=5,
-                    ),
-                    ft.Text(now_hm(), size=12, color=ft.Colors.WHITE54),
-                ],
-                tight=True, spacing=5,
-            ),
-            bgcolor=self.make_bubble_colors_dark(is_user),
-            padding=10, border_radius=15,
-            margin=self.make_bubble_margin(is_user),
-        )
-        row    = self.make_message_row(bubble, is_user, user_data)
-        widget = ft.GestureDetector(
-            content=row,
-            on_tap=lambda e: self.open_video_viewer(video_path, file_name),
-            on_long_press_start=lambda e: self.show_message_menu(widget, "Видео", is_user),
-        )
-        return widget
-
-    def create_audio_message(self, audio_path: str, file_name: str,
-                             is_user: bool = True,
-                             one_time_view: bool = False) -> ft.GestureDetector | ft.Container:
-        user_data = self.CURRENT_USER if is_user else self.CONTACT_USER
-        abs_path  = os.path.abspath(audio_path)
-
-        if not os.path.exists(abs_path):
-            print(f"❌ Аудио не найдено: {abs_path}")
-            return self.create_document_message(abs_path, f"❌ {file_name}",
-                                                "Файл не найден", is_user)
-
-        size_text = format_file_size(abs_path)
-        try:
-            file_size = os.path.getsize(abs_path)
-            duration  = [max(30, min(600, int(file_size / (1024 * 1024) * 60)))]
-        except Exception:
-            duration = [180]
-
-        is_playing       = [False]
-        current_position = [0.0]
-        timer_ref        = [None]
-        audio_elem       = [None]
-        play_btn         = [None]
-        slider_ref       = [None]
-        time_text        = [None]
-
-        audio = ft.Audio(src=abs_path, autoplay=False, volume=1)
-        audio_elem[0] = audio
-        self.page.overlay.append(audio)
-
-        def on_slider_change(e):
-            current_position[0] = e.control.value
-            time_text[0].value = (f"{format_time_seconds(current_position[0])} / "
-                                  f"{format_time_seconds(duration[0])}")
-            time_text[0].update()
-
-        def on_slider_release(e):
-            current_position[0] = e.control.value
-            try:
-                audio_elem[0].seek(int(current_position[0] * 1000))
-            except Exception as ex:
-                print(f"❌ Ошибка перемотки: {ex}")
-            on_slider_change(e)
-
-        def tick():
-            if not is_playing[0]:
-                return
-            current_position[0] = min(current_position[0] + 0.5, duration[0])
-            slider_ref[0].value = current_position[0]
-            time_text[0].value  = (f"{format_time_seconds(current_position[0])} / "
-                                   f"{format_time_seconds(duration[0])}")
-            slider_ref[0].update()
-            time_text[0].update()
-
-            if current_position[0] >= duration[0]:
-                is_playing[0]       = False
-                play_btn[0].icon    = ft.Icons.PLAY_ARROW
-                play_btn[0].tooltip = "Воспроизвести"
-                play_btn[0].update()
-                return
-
-            timer_ref[0] = threading.Timer(0.5, tick)
-            timer_ref[0].start()
-
-        def toggle_play(e):
-            try:
-                if is_playing[0]:
-                    is_playing[0]       = False
-                    play_btn[0].icon    = ft.Icons.PLAY_ARROW
-                    play_btn[0].tooltip = "Воспроизвести"
-                    if timer_ref[0]:
-                        timer_ref[0].cancel()
-                    audio_elem[0].pause()
-                else:
-                    is_playing[0]       = True
-                    play_btn[0].icon    = ft.Icons.PAUSE
-                    play_btn[0].tooltip = "Пауза"
-                    if current_position[0] == 0:
-                        audio_elem[0].play()
-                    else:
-                        audio_elem[0].resume()
-                    tick()
-                play_btn[0].update()
-            except Exception as ex:
-                print(f"❌ Ошибка воспроизведения: {ex}")
-
-        btn = ft.IconButton(icon=ft.Icons.PLAY_ARROW, icon_color=ft.Colors.WHITE,
-                            icon_size=30, tooltip="Воспроизвести", on_click=toggle_play)
-        play_btn[0] = btn
-
-        sld = ft.Slider(
-            min=0, max=duration[0], value=0, divisions=100,
-            active_color=ft.Colors.WHITE, inactive_color=ft.Colors.WHITE38,
-            thumb_color=ft.Colors.WHITE,
-            on_change=on_slider_change, on_change_end=on_slider_release,
-        )
-        slider_ref[0] = sld
-
-        tm = ft.Text(f"0:00 / {format_time_seconds(duration[0])}",
-                     color=ft.Colors.WHITE70, size=11, weight=ft.FontWeight.BOLD)
-        time_text[0] = tm
-
-        download_btn = ft.IconButton(
-            icon=ft.Icons.DOWNLOAD, icon_color=ft.Colors.WHITE,
-            icon_size=20, tooltip="Скачать",
-            on_click=lambda e: self.download_file(abs_path, file_name),
-        ) if not one_time_view else ft.Container()
-
-        bubble = ft.Container(
-            content=ft.Column(
-                [
-                    ft.Row(
-                        [
-                            btn,
-                            ft.Column(
-                                [
-                                    ft.Text(
-                                        "🔊 Голосовое сообщение" if one_time_view else file_name,
-                                        color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD, size=13,
-                                        max_lines=1, overflow=ft.TextOverflow.ELLIPSIS,
-                                    ),
-                                    ft.Text(f"🎵 {size_text}", color=ft.Colors.WHITE70, size=11),
-                                ],
-                                spacing=2, expand=True,
-                            ),
-                            download_btn,
-                        ],
-                        spacing=5,
-                    ),
-                    sld,
-                    ft.Row([
-                        tm,
-                        ft.Container(expand=True),
-                        ft.Text(now_hm(), size=12, color=ft.Colors.WHITE54),
-                    ]),
-                ],
-                tight=True, spacing=2,
-            ),
-            bgcolor=self.make_bubble_colors_dark(is_user),
-            padding=10, border_radius=15,
-            margin=self.make_bubble_margin(is_user),
-            width=350,
-        )
-        row    = self.make_message_row(bubble, is_user, user_data)
-        widget = ft.GestureDetector(
-            content=row,
-            on_long_press_start=lambda e: self.show_message_menu(
-                widget, f"🎵 Аудио: {file_name}", is_user),
-        )
-        return widget
-
-    def create_document_message(self, file_path: str, file_name: str,
-                                file_type: str,
-                                is_user: bool = True) -> ft.GestureDetector:
-        user_data  = self.CURRENT_USER if is_user else self.CONTACT_USER
-        size_text  = format_file_size(file_path)
-        clean_name = file_name
-        for prefix in ("📄 ", "📝 ", "📊 ", "📃 ", "🗜️ ", "📎 "):
-            clean_name = clean_name.replace(prefix, "")
-
-        bubble = ft.Container(
-            content=ft.Column(
-                [
-                    ft.Row(
-                        [
-                            ft.Icon(ft.Icons.INSERT_DRIVE_FILE, color=ft.Colors.WHITE, size=40),
-                            ft.Column(
-                                [
-                                    ft.Text(file_name, color=ft.Colors.WHITE,
-                                            weight=ft.FontWeight.BOLD, size=13,
-                                            max_lines=2, overflow=ft.TextOverflow.ELLIPSIS),
-                                    ft.Text(f"{file_type} • {size_text}",
-                                            color=ft.Colors.WHITE70, size=11),
-                                ],
-                                spacing=2, expand=True,
-                            ),
-                            ft.IconButton(
-                                icon=ft.Icons.DOWNLOAD, icon_color=ft.Colors.WHITE,
-                                icon_size=20, tooltip="Скачать",
-                                on_click=lambda e: self.download_file(file_path, clean_name),
-                            ),
-                        ],
-                        spacing=10,
-                    ),
-                    ft.Text(now_hm(), size=12, color=ft.Colors.WHITE54),
-                ],
-                tight=True, spacing=5,
-            ),
-            bgcolor=self.make_bubble_colors_dark(is_user),
-            padding=10, border_radius=15,
-            margin=self.make_bubble_margin(is_user),
-            width=280,
-        )
-        row    = self.make_message_row(bubble, is_user, user_data)
-        widget = ft.GestureDetector(
-            content=row,
-            on_long_press_start=lambda e: self.show_message_menu(widget, file_name, is_user),
-        )
-        return widget
-
-    # ── Отправка ───────────────────────────────────────────────────────────────
-
-    def send_text_message(self, e):
-        text = self.message_input.value.strip()
-        if not text:
-            return
-
-        quote = self.reply_to[0]
-        self.add_message_to_chat(self.create_text_message(text, is_user=True, quote=quote))
-
-        payload: dict = {"message": text, "sender_id": self.CURRENT_USER["id"]}
-        if quote:
-            payload["reply_to"] = quote
-        try:
-            conn.send_text(payload)
-        except Exception as ex:
-            self.show_snack(f"❌ Ошибка отправки: {ex}")
-
-        self.cancel_reply()
-        self.message_input.value = ""
-        self.message_input.update()
-        self.reset_input_buttons()
-
-    def send_file_via_ws(self, file_path: str, file_name: str,
-                         file_type: str, one_time_view: bool = False) -> bool:
-        try:
-            file_size = os.path.getsize(file_path)
-            if file_size > MAX_FILE_SIZE:
-                self.show_snack("❌ Файл слишком большой! Максимум 50 МБ")
-                return False
-            with open(file_path, "rb") as f:
-                file_bytes = f.read()
-            metadata = json.dumps({"file_name": file_name,
-                                   "file_type": file_type,
-                                   "file_size": file_size})
-            conn.send_binary(metadata.encode("utf-8") + FILE_SEPARATOR + file_bytes)
-            return True
-        except Exception as e:
-            import traceback
-            print(f"❌ Ошибка отправки файла: {e}")
-            traceback.print_exc()
-            return False
-
-    def send_delete_command(self, msg_id: str, text: str) -> bool:
-        try:
-            conn.send_text({
-                "type":         "delete",
-                "message_id":   msg_id,
-                "message_text": text,
-                "sender_id":    self.CURRENT_USER["id"],
-                "timestamp":    datetime.datetime.now().timestamp(),
-            })
-            return True
-        except Exception as e:
-            print(f"❌ Ошибка команды удаления: {e}")
-            return False
-
-    # ── Работа с файлами ───────────────────────────────────────────────────────
-
-    def on_file_picked(self, e: ft.FilePickerResultEvent):
-        if e.files:
-            for f in e.files:
-                self.show_rename_dialog({"path": f.path, "name": f.name,
-                                         "display_name": f.name})
-
-    def show_rename_dialog(self, file_info: dict):
-        name_no_ext, ext = os.path.splitext(file_info["name"])
-        is_media         = ext.lower() in IMAGE_EXTS | VIDEO_EXTS | AUDIO_EXTS
-
-        rename_field = ft.TextField(value=name_no_ext, label="Название",
-                                    expand=True, text_size=13)
-        one_time_cb  = ft.Checkbox(label="Одноразовый", value=False)
-
-        def confirm(e):
-            new_name = rename_field.value.strip() + ext
-            file_info["display_name"]  = new_name or file_info["name"]
-            file_info["one_time_view"] = one_time_cb.value if is_media else False
-            self.page.close(dlg)
-            self.add_file_to_chat(file_info)
-
-        def skip(e):
-            file_info["display_name"]  = file_info["name"]
-            file_info["one_time_view"] = one_time_cb.value if is_media else False
-            self.page.close(dlg)
-            self.add_file_to_chat(file_info)
-
-        short_name = (file_info["name"][:35] + "..."
-                      if len(file_info["name"]) > 35 else file_info["name"])
-        items = [ft.Text(short_name, size=11, weight=ft.FontWeight.BOLD), rename_field]
-        if is_media:
-            items.append(one_time_cb)
-
-        dlg = ft.AlertDialog(
-            title=ft.Text("Отправка файла", size=15),
-            content=ft.Container(content=ft.Column(items, tight=True, spacing=10), width=280),
-            actions=[
-                ft.TextButton("Отмена",    on_click=lambda e: self.page.close(dlg)),
-                ft.TextButton("Отправить", on_click=confirm),
-            ],
-        )
-        self.page.open(dlg)
-
-    def add_file_to_chat(self, file_info: dict):
-        p            = file_info["path"]
-        display_name = file_info["display_name"]
-        one_time     = file_info.get("one_time_view", False)
-        ftype        = get_file_type(display_name)
-        saved_path   = self.auto_save_file(p, display_name)
-
-        self.send_file_via_ws(saved_path, display_name, ftype, one_time)
-
-        ext = get_file_ext(display_name)
-        if ext in IMAGE_EXTS:
-            widget = self.create_image_message(saved_path, display_name,
-                                               is_user=True, one_time_view=one_time)
-        elif ext in VIDEO_EXTS:
-            widget = self.create_video_message(saved_path, display_name, is_user=True)
-        elif ext in AUDIO_EXTS:
-            widget = self.create_audio_message(saved_path, display_name,
-                                               is_user=True, one_time_view=one_time)
-        else:
-            widget = self.create_document_message(saved_path, f"📎 {display_name}",
-                                                  "Файл", is_user=True)
-
-        self.messages_column.controls.append(widget)
-        self.all_messages.append(widget)
-        self.sent_media_files.append({"name": display_name, "type": ext, "path": saved_path})
-        self.scroll_to_bottom()
-        self.page.update()
-
-    # ── Обработка входящих сообщений ──────────────────────────────────────────
-
-    def handle_incoming_file(self, msg: dict):
-        try:
-            file_name = msg["file_name"]
-            sender_id = msg.get("sender_id")
-
-            if sender_id != self.CONTACT_USER["id"]:
-                return
-
-            file_bytes = base64.b64decode(msg["file_data"])
-            timestamp  = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            save_name  = f"{timestamp}_{file_name}"
-            save_path  = os.path.join(INCOMING_FOLDER, save_name)
-
-            with open(save_path, "wb") as f:
-                f.write(file_bytes)
-
-            shutil.copy2(save_path, os.path.join(ASSETS_FOLDER, os.path.basename(save_path)))
-
-            ext = get_file_ext(file_name)
-            if ext in IMAGE_EXTS:
-                widget = self.create_image_message(save_path, file_name, is_user=False)
-            elif ext in VIDEO_EXTS:
-                widget = self.create_video_message(save_path, file_name, is_user=False)
-            elif ext in AUDIO_EXTS:
-                widget = self.create_audio_message(save_path, file_name, is_user=False)
-            else:
-                widget = self.create_document_message(save_path, f"📎 {file_name}",
-                                                      "Файл", is_user=False)
-            self.add_message_to_chat(widget)
-        except Exception as e:
-            import traceback
-            print(f"❌ Ошибка получения файла: {e}")
-            traceback.print_exc()
-
-    def poll_queue(self):
-        """Опрашивает очередь сообщений каждые 0.5 секунды."""
-        try:
-            while not conn.message_queue.empty():
-                msg = conn.message_queue.get_nowait()
-                if msg.get("type") == "file":
-                    if not self.is_blocked[0]:
-                        self.handle_incoming_file(msg)
-                else:
-                    sender_id = msg.get("sender_id")
-                    text      = msg.get("message")
-                    in_quote  = msg.get("reply_to")
-                    if text and sender_id == self.CONTACT_USER["id"] and not self.is_blocked[0]:
-                        self.add_message_to_chat(
-                            self.create_text_message(text, is_user=False, quote=in_quote))
-        except queue.Empty:
-            pass
-        threading.Timer(0.5, self.poll_queue).start()
-
-    # ── Голосовые сообщения ────────────────────────────────────────────────────
-
-    def _build_voice_panel(self):
-        self.recording_label  = ft.Text("Запись... 0:00", size=14)
-        self.voice_one_time_cb = ft.Checkbox(label="Одноразовый", value=False)
-
-        def cancel_voice(e):
-            self.voice_panel.visible       = False
-            self.recording_start[0]        = None
-            self.voice_one_time_cb.value   = False
-            self.voice_panel.update()
-
-        def send_voice(e):
-            ts        = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            file_name = f"voice_{ts}.mp3"
-            file_path = os.path.join(VOICE_FOLDER, file_name)
-            try:
-                open(file_path, "w").close()
-                self._send_voice_message(file_path, file_name,
-                                         one_time=self.voice_one_time_cb.value)
-                self.show_snack("⚠️ Демо-версия. В реальном приложении — настоящая запись.")
-            except Exception as ex:
-                print(f"❌ Ошибка создания файла: {ex}")
-            self.voice_panel.visible     = False
-            self.recording_start[0]      = None
-            self.voice_one_time_cb.value = False
-            self.voice_panel.update()
-
-        self.voice_panel = ft.Container(
-            visible=False,
-            content=ft.Column(
-                [
-                    ft.Text("Запись голосового", size=14, weight=ft.FontWeight.BOLD),
-                    ft.Row(
-                        [ft.Icon(ft.Icons.MIC, color=ft.Colors.RED, size=30),
-                         self.recording_label],
-                        alignment=ft.MainAxisAlignment.CENTER,
-                    ),
-                    self.voice_one_time_cb,
-                    ft.Row(
-                        [
-                            ft.ElevatedButton("Отмена",    on_click=cancel_voice,
-                                              bgcolor=ft.Colors.GREY_300),
-                            ft.ElevatedButton("Отправить", on_click=send_voice,
-                                              bgcolor=ft.Colors.BLUE, color=ft.Colors.WHITE),
-                        ],
-                        alignment=ft.MainAxisAlignment.CENTER, spacing=10,
-                    ),
-                ],
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=10,
-            ),
-            bgcolor=ft.Colors.WHITE,
-            border_radius=10, padding=15,
-            shadow=ft.BoxShadow(spread_radius=1, blur_radius=15,
-                                color=ft.Colors.BLACK54, offset=ft.Offset(0, 0)),
-        )
-
-    def _send_voice_message(self, audio_path: str, file_name: str, one_time: bool = False):
-        saved = self.auto_save_file(audio_path, file_name)
-        self.add_message_to_chat(
-            self.create_audio_message(saved, "Голосовое сообщение",
-                                      is_user=True, one_time_view=one_time))
-        if self.auto_save_folder[0] and saved != audio_path:
-            self.show_snack("✅ Голосовое сообщение сохранено")
-
-    def _start_recording_timer(self):
-        self.recording_start[0] = time.time()
-        self._tick_recording()
-
-    def _tick_recording(self):
-        if self.recording_start[0] and self.voice_panel.visible:
-            elapsed = int(time.time() - self.recording_start[0])
-            self.recording_label.value = f"Запись... {elapsed // 60}:{elapsed % 60:02d}"
-            self.recording_label.update()
-            threading.Timer(1.0, self._tick_recording).start()
-
-    def toggle_voice(self, e):
-        self.voice_panel.visible = not self.voice_panel.visible
-        if self.voice_panel.visible:
-            self._start_recording_timer()
-        self.voice_panel.update()
-
-    # ── Кнопки ввода ──────────────────────────────────────────────────────────
-
-    def reset_input_buttons(self):
-        self.mic_btn.visible    = True
-        self.attach_btn.visible = True
-        self.send_btn.visible   = False
-        for b in (self.mic_btn, self.attach_btn, self.send_btn):
-            b.update()
-
-    def on_text_change(self, e):
-        has_text = bool(self.message_input.value.strip())
-        self.mic_btn.visible    = not has_text
-        self.attach_btn.visible = not has_text
-        self.send_btn.visible   = has_text
-        for b in (self.mic_btn, self.attach_btn, self.send_btn):
-            b.update()
-
-    def _build_input_bar(self):
-        self.message_input = ft.TextField(
-            hint_text="Введите сообщение...",
-            expand=True, multiline=True, min_lines=1, max_lines=3,
-            on_change=self.on_text_change,
-        )
-
-        self.file_picker = ft.FilePicker(on_result=self.on_file_picked)
-
-        self.mic_btn    = ft.IconButton(icon=ft.Icons.KEYBOARD_VOICE,
-                                        on_click=self.toggle_voice,
-                                        icon_color=ft.Colors.BLUE, visible=True)
-        self.attach_btn = ft.IconButton(
-            icon=ft.Icons.ATTACH_FILE, icon_color=ft.Colors.BLUE,
-            tooltip="Прикрепить файл", visible=True,
-            on_click=lambda e: self.file_picker.pick_files(
-                allow_multiple=True, dialog_title="Выберите файлы"),
-        )
-        self.send_btn = ft.IconButton(icon=ft.Icons.SEND,
-                                      on_click=self.send_text_message,
-                                      icon_color=ft.Colors.BLUE, visible=False)
-
-        self.input_bar = ft.Container(
-            content=ft.Column(
-                [
-                    self.reply_bar,
-                    ft.Row(
-                        [self.attach_btn, self.message_input,
-                         self.mic_btn, self.send_btn],
-                        vertical_alignment=ft.CrossAxisAlignment.END,
-                    ),
-                ],
-                spacing=0,
-            ),
-            padding=10,
-            bgcolor=ft.Colors.WHITE,
-        )
-
-    # ── Шапка чата ────────────────────────────────────────────────────────────
-
-    def _build_header(self):
-        self.chat_header = ft.Container(
-            content=ft.Row(
-                [
-                    ft.IconButton(icon=ft.Icons.ARROW_BACK,
-                                  on_click=lambda e: self.page.go('/'),
-                                  icon_color=ft.Colors.BLUE),
-                    ft.GestureDetector(
-                        content=ft.Row(
-                            [
-                                self.make_avatar(self.CONTACT_USER),
-                                ft.Column(
-                                    [
-                                        ft.Text(self.CONTACT_USER["name"],
-                                                weight=ft.FontWeight.BOLD, size=16),
-                                        ft.Text(self.CONTACT_USER["last_seen"],
-                                                size=12, color=ft.Colors.GREY),
-                                    ],
-                                    spacing=0,
-                                ),
-                            ],
-                            alignment=ft.MainAxisAlignment.START,
-                        ),
-                        on_tap=self.show_user_profile,
-                    ),
-                    ft.Container(expand=True),
-                    ft.IconButton(
-                        icon=ft.Icons.DELETE_SWEEP, icon_color=ft.Colors.RED,
-                        tooltip="Очистить весь чат",
-                        on_click=lambda e: self.clear_all_chat(),
-                    ),
-                ],
-                alignment=ft.MainAxisAlignment.START,
-            ),
-            padding=15,
-            bgcolor=ft.Colors.WHITE,
-            border=ft.border.only(bottom=ft.border.BorderSide(1, ft.Colors.GREY_300)),
-        )
-
-    # ── Профиль пользователя ───────────────────────────────────────────────────
-
-    def show_user_profile(self, e):
-        def close(e): self.page.close(dlg)
-
-        big_avatar     = self.make_avatar(self.CONTACT_USER, size=160)
-        block_icon_ref = ft.Ref[ft.Icon]()
-        block_text_ref = ft.Ref[ft.Text]()
-
-        def _update_block_btn():
-            if self.is_blocked[0]:
-                block_icon_ref.current.name  = ft.Icons.LOCK_OPEN
-                block_icon_ref.current.color = ft.Colors.ORANGE
-                block_text_ref.current.value = "Разблокировать"
-                block_text_ref.current.color = ft.Colors.ORANGE
-            else:
-                block_icon_ref.current.name  = ft.Icons.BLOCK
-                block_icon_ref.current.color = ft.Colors.RED
-                block_text_ref.current.value = "Заблокировать"
-                block_text_ref.current.color = ft.Colors.RED
-            block_icon_ref.current.update()
-            block_text_ref.current.update()
-
-        def toggle_block(e):
-            self.is_blocked[0] = not self.is_blocked[0]
-            _update_block_btn()
-            self._apply_block_state()
-            if self.is_blocked[0]:
-                self.show_snack("🚫 Пользователь заблокирован")
-            else:
-                self.show_snack("✅ Пользователь разблокирован")
-
-        block_btn = ft.TextButton(
-            content=ft.Row(
-                [
-                    ft.Icon(
-                        ft.Icons.BLOCK if not self.is_blocked[0] else ft.Icons.LOCK_OPEN,
-                        color=ft.Colors.RED if not self.is_blocked[0] else ft.Colors.ORANGE,
-                        ref=block_icon_ref,
-                    ),
-                    ft.Text(
-                        "Заблокировать" if not self.is_blocked[0] else "Разблокировать",
-                        size=14,
-                        color=ft.Colors.RED if not self.is_blocked[0] else ft.Colors.ORANGE,
-                        ref=block_text_ref,
-                    ),
-                ],
-                spacing=10,
-            ),
-            on_click=toggle_block,
-        )
-
-        dlg = ft.AlertDialog(
-            content=ft.Container(
-                content=ft.Column(
-                    [
-                        ft.Container(content=big_avatar,
-                                     alignment=ft.alignment.center, padding=20),
-                        ft.Text(self.CONTACT_USER["name"], size=24,
-                                weight=ft.FontWeight.BOLD,
-                                text_align=ft.TextAlign.CENTER),
-                        ft.Text(self.CONTACT_USER["phone"], size=16,
-                                color=ft.Colors.GREY,
-                                text_align=ft.TextAlign.CENTER),
-                        ft.Container(alignment=ft.alignment.center, padding=10),
-                        ft.Divider(),
-                        ft.Container(
-                            content=ft.Column(
-                                [
-                                    self._info_row(ft.Icons.INFO_OUTLINE, "О себе",
-                                                   self.CONTACT_USER["about"]),
-                                    ft.Divider(height=20),
-                                    self._info_row(ft.Icons.PHOTO_LIBRARY,
-                                                   "Отправленные файлы",
-                                                   f"{len(self.sent_media_files)} файлов"),
-                                    ft.Divider(height=20),
-                                    self._info_row(ft.Icons.CHAT_BUBBLE_OUTLINE,
-                                                   "Сообщений",
-                                                   f"{len(self.all_messages)} сообщений"),
-                                ],
-                                spacing=10,
-                            ),
-                            padding=10,
-                        ),
-                        ft.Divider(),
-                        ft.Column(
-                            [
-                                ft.TextButton(
-                                    content=ft.Row(
-                                        [
-                                            ft.Icon(ft.Icons.NOTIFICATIONS_OFF,
-                                                    color=ft.Colors.GREY),
-                                            ft.Text("Отключить уведомления", size=14),
-                                        ],
-                                        spacing=10,
-                                    ),
-                                    on_click=lambda e: self.show_snack(
-                                        "🔕 Уведомления отключены"),
-                                ),
-                                block_btn,
-                            ],
-                            spacing=5,
-                        ),
-                    ],
-                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                    spacing=10, scroll=ft.ScrollMode.AUTO,
-                ),
-                width=400, height=700,
-            ),
-            actions=[ft.TextButton("Закрыть", on_click=close)],
-        )
-        self.page.open(dlg)
-
-    def _profile_action(self, icon, label, color, handler):
-        return ft.Column(
-            [
-                ft.IconButton(icon=icon, icon_color=color, icon_size=30,
-                              on_click=handler, tooltip=label),
-                ft.Text(label, size=12),
-            ],
-            horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=5,
-        )
-
-    def _info_row(self, icon, title, value):
-        return ft.Row(
-            [
-                ft.Icon(icon, size=20, color=ft.Colors.GREY),
-                ft.Column(
-                    [ft.Text(title, size=12, color=ft.Colors.GREY),
-                     ft.Text(value, size=14)],
-                    spacing=2,
-                ),
-            ],
-            spacing=10,
-        )
-
-    # ── Очистка чата ──────────────────────────────────────────────────────────
-
-    def clear_all_chat(self):
-        def confirm(e):
-            self.messages_column.controls.clear()
-            self.all_messages.clear()
-            self.sent_media_files.clear()
-            self.messages_column.update()
-            self.page.close(dlg)
-            for folder in (ASSETS_FOLDER, INCOMING_FOLDER, VOICE_FOLDER):
-                if os.path.exists(folder):
-                    for filename in os.listdir(folder):
-                        fp = os.path.join(folder, filename)
-                        try:
-                            if os.path.isfile(fp):
-                                os.remove(fp)
-                        except Exception as ex:
-                            print(f"❌ Ошибка удаления файла {fp}: {ex}")
-            self.show_snack("🗑️ Чат очищен")
-
-        dlg = ft.AlertDialog(
-            title=ft.Text("Очистить чат?"),
-            content=ft.Text("Все сообщения будут удалены"),
-            actions=[
-                ft.TextButton("Отмена",   on_click=lambda e: self.page.close(dlg)),
-                ft.TextButton("Очистить", on_click=confirm,
-                              style=ft.ButtonStyle(color=ft.Colors.RED)),
-            ],
-        )
-        self.page.open(dlg)

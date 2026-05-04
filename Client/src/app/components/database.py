@@ -96,6 +96,24 @@ def save_contact_if_not_exists(db_path: str, contact_id, username, phone="") -> 
         return True
 
 
+def save_contact_name(db_path: str, contact_id, name: str) -> bool:
+    """Сохраняет имя контакту и меняет статус на save_user."""
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+        cur.execute(
+            "UPDATE contacts SET username = ?, status_user_contact = 'save_user' "
+            "WHERE user_id = ?",
+            (name, contact_id)
+        )
+        # Обновляем имя чата тоже
+        cur.execute(
+            "UPDATE chats SET chat_name = ? WHERE contact_id = ?",
+            (name, contact_id)
+        )
+        con.commit()
+        return cur.rowcount > 0
+
+
 def get_contact_display_name(db_path: str, contact_id) -> str:
     """Возвращает имя контакта или номер телефона, если контакт не сохранён."""
     with sql.connect(db_path) as con:

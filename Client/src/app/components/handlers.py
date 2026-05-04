@@ -6,6 +6,7 @@ import flet as ft
 from .database import (
     load_chats, delete_chat, create_new_chat,
     save_contact_if_not_exists, toggle_chat_favorite, delete_user_and_contacts,
+    save_contact_name, get_contact_id_by_chat,
 )
 from .ui_components import create_contact_item
 from .utils import format_phone
@@ -92,10 +93,100 @@ def setup_handlers(page, db_path, contacts, chats,
             update_fn()
 
         elif action == "save_contact":
-            _wip_dialog(page, "В разработке", "Сохранение контакта будет добавлено позже")
+            contact_id = get_contact_id_by_chat(db_path, chat_id)
+            if not contact_id:
+                return
+
+            name_field = ft.TextField(
+                label="Имя контакта",
+                autofocus=True,
+                border_radius=10,
+            )
+
+            def _do_save(e):
+                name = name_field.value.strip()
+                if not name:
+                    name_field.error_text = "Введите имя"
+                    page.update()
+                    return
+                save_contact_name(db_path, contact_id, name)
+                save_dlg.open = False
+                page.update()
+                update_fn()
+
+            save_dlg = ft.AlertDialog(
+                modal=True,
+                title=ft.Text("Сохранить контакт"),
+                content=ft.Container(
+                    content=ft.Column([
+                        ft.Text("Введите имя для этого контакта:", size=14, color=ft.Colors.GREY),
+                        name_field,
+                    ], spacing=10, tight=True),
+                    width=300,
+                ),
+                actions=[
+                    ft.TextButton(
+                        "Сохранить",
+                        style=ft.ButtonStyle(color=ft.Colors.GREEN),
+                        on_click=_do_save,
+                    ),
+                    ft.TextButton(
+                        "Отмена",
+                        on_click=lambda e: (setattr(save_dlg, 'open', False), page.update()),
+                    ),
+                ],
+            )
+            page.overlay.append(save_dlg)
+            save_dlg.open = True
+            page.update()
 
         elif action == "edit_contact":
-            _wip_dialog(page, "В разработке", "Редактирование контакта будет добавлено позже")
+            contact_id = get_contact_id_by_chat(db_path, chat_id)
+            if not contact_id:
+                return
+
+            name_field = ft.TextField(
+                label="Новое имя контакта",
+                autofocus=True,
+                border_radius=10,
+            )
+
+            def _do_edit(e):
+                name = name_field.value.strip()
+                if not name:
+                    name_field.error_text = "Введите имя"
+                    page.update()
+                    return
+                save_contact_name(db_path, contact_id, name)
+                edit_dlg.open = False
+                page.update()
+                update_fn()
+
+            edit_dlg = ft.AlertDialog(
+                modal=True,
+                title=ft.Text("Изменить контакт"),
+                content=ft.Container(
+                    content=ft.Column([
+                        ft.Text("Введите новое имя для контакта:", size=14, color=ft.Colors.GREY),
+                        name_field,
+                    ], spacing=10, tight=True),
+                    width=300,
+                ),
+                actions=[
+                    ft.TextButton(
+                        "Сохранить",
+                        style=ft.ButtonStyle(color=ft.Colors.GREEN),
+                        on_click=_do_edit,
+                    ),
+                    ft.TextButton(
+                        "Отмена",
+                        on_click=lambda e: (setattr(edit_dlg, 'open', False), page.update()),
+                    ),
+                ],
+            )
+            page.overlay.append(edit_dlg)
+            edit_dlg.open = True
+            page.update()
 
     def show_contact_selection(e, contact_dialog, contact_list, search_field,
                                contacts, create_chat_func,

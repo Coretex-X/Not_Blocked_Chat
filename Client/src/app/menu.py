@@ -35,12 +35,15 @@ def main_menu(page: ft.Page) -> ft.View:
     # ── Вспомогательная: статус контакта по chat ──────────────────────────────
 
     def _contact_status_map():
-        return {c["id"]: c.get("status_user_contact", "save_user") for c in contacts}
+        # Всегда читаем свежие данные из БД — чтобы статус менялся сразу после сохранения
+        fresh_contacts = load_contacts(db)
+        return {c["id"]: c.get("status_user_contact", "save_user") for c in fresh_contacts}
 
     def _make_chat_item(chat, status_map):
         display = dict(chat)
         cid = chat.get("contact_id")
         if cid:
+            # get_contact_display_name тоже читает из БД — имя будет актуальным
             display["name"] = get_contact_display_name(db, cid)
         c_status = status_map.get(cid, "save_user")
         return create_chat_item(
@@ -65,8 +68,10 @@ def main_menu(page: ft.Page) -> ft.View:
         )
 
     def update_chats_list():
-        nonlocal chats
-        chats = load_chats(db)
+        nonlocal chats, contacts
+        # Перечитываем и чаты, и контакты из БД — имена и статусы будут актуальными
+        chats    = load_chats(db)
+        contacts = load_contacts(db)
         chats_col.controls.clear()
         smap = _contact_status_map()
         if chats:
@@ -93,6 +98,8 @@ def main_menu(page: ft.Page) -> ft.View:
         page.update()
 
     def update_contacts_tab():
+        nonlocal contacts
+        contacts = load_contacts(db)
         contacts_col.controls.clear()
         if not contacts:
             contacts_col.controls.append(

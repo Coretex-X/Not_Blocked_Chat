@@ -19,9 +19,11 @@ def main_menu(page: ft.Page) -> ft.View:
     chats     = load_chats(db)
     user_data = get_user_data(db)
 
-    exit_dlg                                               = create_exit_dialog()
-    contact_dialog, contact_list, search_field, \
-        loading_container, search_result_container         = create_contact_dialog()
+    exit_dlg = create_exit_dialog()
+
+    (contact_dialog, contact_list, search_field,
+     loading_container, search_result_container,
+     not_saved_col, saved_col, delete_btn_row) = create_contact_dialog()
 
     chats_col     = ft.Column(scroll=ft.ScrollMode.ADAPTIVE, spacing=2, expand=True)
     favorites_col = ft.Column(scroll=ft.ScrollMode.ADAPTIVE, spacing=2, expand=True)
@@ -35,7 +37,6 @@ def main_menu(page: ft.Page) -> ft.View:
     # ── Вспомогательная: статус контакта по chat ──────────────────────────────
 
     def _contact_status_map():
-        # Всегда читаем свежие данные из БД — чтобы статус менялся сразу после сохранения
         fresh_contacts = load_contacts(db)
         return {c["id"]: c.get("status_user_contact", "save_user") for c in fresh_contacts}
 
@@ -43,7 +44,6 @@ def main_menu(page: ft.Page) -> ft.View:
         display = dict(chat)
         cid = chat.get("contact_id")
         if cid:
-            # get_contact_display_name тоже читает из БД — имя будет актуальным
             display["name"] = get_contact_display_name(db, cid)
         c_status = status_map.get(cid, "save_user")
         return create_chat_item(
@@ -69,7 +69,6 @@ def main_menu(page: ft.Page) -> ft.View:
 
     def update_chats_list():
         nonlocal chats, contacts
-        # Перечитываем и чаты, и контакты из БД — имена и статусы будут актуальными
         chats    = load_chats(db)
         contacts = load_contacts(db)
         chats_col.controls.clear()
@@ -136,6 +135,9 @@ def main_menu(page: ft.Page) -> ft.View:
                 cid, cname, update_chats_list, handlers['open_existing_chat'], contact_dialog
             ),
             loading_container, search_result_container,
+            not_saved_col=not_saved_col,
+            saved_col=saved_col,
+            delete_btn_row=delete_btn_row,
         )
 
     new_chat_fab.on_click  = open_new_chat_dialog

@@ -384,7 +384,127 @@ class NewChatConsumer(BaseChatConsumer):
             await self.handle_binary_data(bytes_data)
 
 
-class YourConsumer(AsyncWebsocketConsumer):
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+'''class YourConsumer(AsyncWebsocketConsumer):
     
     async def connect(self):
         await self.accept()
@@ -722,4 +842,4 @@ async def broadcast_user_status(user_id, status, room_ids):
             }
         )
     
-    logger.info(f"User {user_id} status broadcasted: {status}")
+    logger.info(f"User {user_id} status broadcasted: {status}")'''

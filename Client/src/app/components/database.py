@@ -114,6 +114,23 @@ def save_contact_name(db_path: str, contact_id, name: str) -> bool:
         return cur.rowcount > 0
 
 
+def delete_not_saved_contacts(db_path: str) -> int:
+    """Удаляет все контакты со статусом not_save_user и их чаты. Возвращает кол-во удалённых."""
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT user_id FROM contacts WHERE status_user_contact = 'not_save_user'"
+        )
+        ids = [r[0] for r in cur.fetchall()]
+        if not ids:
+            return 0
+        placeholders = ",".join("?" * len(ids))
+        cur.execute(f"DELETE FROM chats WHERE contact_id IN ({placeholders})", ids)
+        cur.execute(f"DELETE FROM contacts WHERE user_id IN ({placeholders})", ids)
+        con.commit()
+        return len(ids)
+
+
 def get_contact_display_name(db_path: str, contact_id) -> str:
     """Возвращает имя контакта или номер телефона, если контакт не сохранён."""
     with sql.connect(db_path) as con:

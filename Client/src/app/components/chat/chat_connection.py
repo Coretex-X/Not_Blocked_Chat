@@ -17,7 +17,7 @@ WS_URL_DATA     = "ws://127.0.0.1:5000/ws/data/"
 WS_URL_CHAT     = f"ws://127.0.0.1:5000/ws/chat_user/{token}/"
 WS_URL_NEW_CHAT = f"ws://127.0.0.1:5000/ws/new_chat_user/{token}/"
 FILE_SEPARATOR  = b"|||BINARY_DATA|||"
-LOBBI_TIME      = "lobbi"
+LOBBI_TIME      = "lobbi1"
 
 # ── Состояние ─────────────────────────────────────────────────────────────────
 
@@ -30,6 +30,7 @@ running = True
 
 def start_connection(my_id: str, contact_id: str, status_chat: str):
     """Аутентифицирует чат-комнату, открывает WS и запускает поток чтения."""
+    print(my_id, contact_id, status_chat)
     global ws
     try:
         _authenticate(my_id, contact_id, status_chat)
@@ -59,13 +60,13 @@ def _authenticate(my_id: str, contact_id: str, status_chat: str):
         conn = websocket.WebSocket()
         conn.connect(WS_URL_DATA)
         conn.send(json.dumps({
-            "room":        LOBBI_TIME if status_chat == 'existing_chat' else lobbi,
+            "room":        LOBBI_TIME,
             "user_id":     my_id,
             "guest_id":    contact_id,
             "status_chat": status_chat,
             "token":       token,
         }))
-        conn.close()
+        conn.close()#LOBBI_TIME if status_chat == 'existing_chat' else lobbi,
     except Exception:
         pass
 

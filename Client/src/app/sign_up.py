@@ -67,8 +67,14 @@ def main_sign_up(page: ft.Page):
                 cur = con.cursor()
                 cur.execute("DELETE FROM user_settings")
                 cur.execute("DELETE FROM users_data")
-                cur.execute(f"INSERT INTO users_data (id_user, name, profile, number, token) VALUES ('{id_user}', '{name}', '{profil}', '{number}', '{token}')")
-                cur.execute(f"INSERT INTO user_settings (authorization) VALUES ('{authorization}')")
+                cur.execute(
+                    "INSERT INTO users_data (id_user, name, profile, number, token) VALUES (?, ?, ?, ?, ?)",
+                    (id_user, name, profil, number, token)
+                )
+                cur.execute(
+                    "INSERT INTO user_settings (authorization) VALUES (?)",
+                    (authorization,)
+                )
                 # Очистка полей после успешной отправки
                 text_input_login.value = ""
                 text_input_password.value = ""

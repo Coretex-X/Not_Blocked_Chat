@@ -6,7 +6,7 @@ import flet as ft
 from .database import (
     load_chats, delete_chat, create_new_chat,
     save_contact_if_not_exists, toggle_chat_favorite, delete_user_and_contacts,
-    save_contact_name, get_contact_id_by_chat,
+    save_contact_name, get_contact_id_by_chat, delete_not_saved_contacts,
 )
 from .ui_components import create_contact_item
 from .utils import format_phone
@@ -14,7 +14,6 @@ from .chat.chat_manager import set_chat_id, set_status_chat
 
 
 def search_user_by_phone(number: str) -> dict | None:
-    """Поиск пользователя по номеру через сервер."""
     digits = ''.join(filter(str.isdigit, str(number)))
     if len(digits) == 11:
         digits = digits[1:]
@@ -36,18 +35,6 @@ def _soon_dialog(page: ft.Page) -> None:
         actions=[ft.TextButton("OK", on_click=lambda e: (setattr(dlg, 'open', False), page.update()))],
     )
     page.dialog = dlg
-    dlg.open = True
-    page.update()
-
-
-def _wip_dialog(page: ft.Page, title: str, text: str) -> None:
-    dlg = ft.AlertDialog(
-        modal=True,
-        title=ft.Text(title),
-        content=ft.Text(text),
-        actions=[ft.TextButton("OK", on_click=lambda e: (setattr(dlg, 'open', False), page.update()))],
-    )
-    page.overlay.append(dlg)
     dlg.open = True
     page.update()
 
@@ -97,11 +84,7 @@ def setup_handlers(page, db_path, contacts, chats,
             if not contact_id:
                 return
 
-            name_field = ft.TextField(
-                label="Имя контакта",
-                autofocus=True,
-                border_radius=10,
-            )
+            name_field = ft.TextField(label="Имя контакта", autofocus=True, border_radius=10)
 
             def _do_save(e):
                 name = name_field.value.strip()
@@ -125,15 +108,10 @@ def setup_handlers(page, db_path, contacts, chats,
                     width=300,
                 ),
                 actions=[
-                    ft.TextButton(
-                        "Сохранить",
-                        style=ft.ButtonStyle(color=ft.Colors.GREEN),
-                        on_click=_do_save,
-                    ),
-                    ft.TextButton(
-                        "Отмена",
-                        on_click=lambda e: (setattr(save_dlg, 'open', False), page.update()),
-                    ),
+                    ft.TextButton("Сохранить", style=ft.ButtonStyle(color=ft.Colors.GREEN),
+                                  on_click=_do_save),
+                    ft.TextButton("Отмена",
+                                  on_click=lambda e: (setattr(save_dlg, 'open', False), page.update())),
                 ],
             )
             page.overlay.append(save_dlg)
@@ -145,11 +123,7 @@ def setup_handlers(page, db_path, contacts, chats,
             if not contact_id:
                 return
 
-            name_field = ft.TextField(
-                label="Новое имя контакта",
-                autofocus=True,
-                border_radius=10,
-            )
+            name_field = ft.TextField(label="Новое имя контакта", autofocus=True, border_radius=10)
 
             def _do_edit(e):
                 name = name_field.value.strip()
@@ -173,78 +147,131 @@ def setup_handlers(page, db_path, contacts, chats,
                     width=300,
                 ),
                 actions=[
-                    ft.TextButton(
-                        "Сохранить",
-                        style=ft.ButtonStyle(color=ft.Colors.GREEN),
-                        on_click=_do_edit,
-                    ),
-                    ft.TextButton(
-                        "Отмена",
-                        on_click=lambda e: (setattr(edit_dlg, 'open', False), page.update()),
-                    ),
+                    ft.TextButton("Сохранить", style=ft.ButtonStyle(color=ft.Colors.GREEN),
+                                  on_click=_do_edit),
+                    ft.TextButton("Отмена",
+                                  on_click=lambda e: (setattr(edit_dlg, 'open', False), page.update())),
                 ],
             )
             page.overlay.append(edit_dlg)
             edit_dlg.open = True
             page.update()
 
+    # ── Диалог выбора контакта ────────────────────────────────────────────────
+
     def show_contact_selection(e, contact_dialog, contact_list, search_field,
                                contacts, create_chat_func,
-                               loading_container=None, search_result_container=None):
+                               loading_container=None, search_result_container=None,
+                               not_saved_col=None, saved_col=None, delete_btn_row=None):
 
-        def render_contacts(filter_text=""):
-            contact_list.controls.clear()
-            saved    = [c for c in contacts if c.get("status_user_contact") != "not_save_user"]
-            not_saved = [c for c in contacts if c.get("status_user_contact") == "not_save_user"]
+        def _refresh_columns(filter_text=""):
+            all_contacts = contacts
+            saved     = [c for c in all_contacts if c.get("status_user_contact") != "not_save_user"]
+            not_saved = [c for c in all_contacts if c.get("status_user_contact") == "not_save_user"]
 
             if filter_text:
                 f = filter_text.lower()
-                saved     = [c for c in saved if f in c["username"].lower()]
+                saved     = [c for c in saved if f in (c["username"] or "").lower()]
                 not_saved = [c for c in not_saved
-                             if f in c["username"].lower() or f in format_phone(c.get("phone", ""))]
+                             if f in (c["username"] or "").lower()
+                             or f in format_phone(c.get("phone", ""))]
 
-            if not saved and not not_saved:
-                contact_list.controls.append(
-                    ft.Container(content=ft.Text("Нет контактов", text_align=ft.TextAlign.CENTER),
-                                 padding=20)
-                )
-            else:
+            # Колонка "Сохранённые"
+            if saved_col is not None:
+                saved_col.controls.clear()
                 if saved:
-                    contact_list.controls.append(
-                        ft.Container(
-                            content=ft.Text("Сохранённые", size=13, weight=ft.FontWeight.BOLD,
-                                            color=ft.Colors.GREY_600),
-                            padding=ft.padding.only(left=10, top=8, bottom=4),
-                        )
-                    )
                     for c in saved:
-                        contact_list.controls.append(
+                        saved_col.controls.append(
                             create_contact_item(
                                 c,
                                 lambda e, cid=c["id"], cname=c["username"]: create_chat_func(cid, cname)
                             )
                         )
-                if not_saved:
-                    contact_list.controls.append(
+                else:
+                    saved_col.controls.append(
                         ft.Container(
-                            content=ft.Text("Не сохранённые", size=13, weight=ft.FontWeight.BOLD,
-                                            color=ft.Colors.GREY_600),
-                            padding=ft.padding.only(left=10, top=12, bottom=4),
+                            content=ft.Text("Нет сохранённых контактов", size=13,
+                                            color=ft.Colors.GREY_400,
+                                            text_align=ft.TextAlign.CENTER),
+                            padding=ft.padding.symmetric(vertical=30),
+                            alignment=ft.alignment.center,
                         )
                     )
+
+            # Колонка "Не сохранённые"
+            if not_saved_col is not None:
+                not_saved_col.controls.clear()
+                if not_saved:
                     for c in not_saved:
                         c_copy = dict(c)
                         c_copy["username"] = format_phone(c.get("phone", "")) or c["username"]
-                        contact_list.controls.append(
+                        not_saved_col.controls.append(
                             create_contact_item(
                                 c_copy,
                                 lambda e, cid=c["id"], cname=c["username"]: create_chat_func(cid, cname)
                             )
                         )
+                else:
+                    not_saved_col.controls.append(
+                        ft.Container(
+                            content=ft.Text("Нет несохранённых контактов", size=13,
+                                            color=ft.Colors.GREY_400,
+                                            text_align=ft.TextAlign.CENTER),
+                            padding=ft.padding.symmetric(vertical=30),
+                            alignment=ft.alignment.center,
+                        )
+                    )
+
+            # Кнопка удаления
+            if delete_btn_row is not None:
+                delete_btn_row.controls.clear()
+                if not_saved:
+                    delete_btn_row.visible = True
+                    delete_btn_row.controls.append(
+                        ft.ElevatedButton(
+                            text=f"Удалить несохранённых ({len(not_saved)})",
+                            icon=ft.Icons.DELETE_SWEEP,
+                            color=ft.Colors.WHITE,
+                            bgcolor=ft.Colors.RED_600,
+                            on_click=_delete_not_saved,
+                        )
+                    )
+                else:
+                    delete_btn_row.visible = False
 
             if search_result_container:
                 search_result_container.content = None
                 search_result_container.visible = False
+
+            page.update()
+
+        def _delete_not_saved(e):
+            def _confirm(e):
+                confirm_dlg.open = False
+                page.update()
+                deleted = delete_not_saved_contacts(db_path)
+                if deleted > 0:
+                    update_chats_list_func()
+                    # Обновляем список внутри диалога
+                    nonlocal contacts
+                    from .database import load_contacts
+                    contacts = load_contacts(db_path)
+                    _refresh_columns()
+
+            confirm_dlg = ft.AlertDialog(
+                modal=True,
+                title=ft.Text("Удалить несохранённые контакты?"),
+                content=ft.Text("Все несохранённые контакты и их чаты будут удалены безвозвратно.",
+                                size=14),
+                actions=[
+                    ft.TextButton("Удалить", style=ft.ButtonStyle(color=ft.Colors.RED),
+                                  on_click=_confirm),
+                    ft.TextButton("Отмена",
+                                  on_click=lambda e: (setattr(confirm_dlg, 'open', False), page.update())),
+                ],
+            )
+            page.overlay.append(confirm_dlg)
+            confirm_dlg.open = True
             page.update()
 
         def show_search_result(data_user):
@@ -280,24 +307,97 @@ def setup_handlers(page, db_path, contacts, chats,
                 search_result_container.content = card
             else:
                 search_result_container.content = ft.Container(
-                    content=ft.Row(
-                        [ft.Icon(ft.Icons.PERSON_OFF, color=ft.Colors.GREY_500, size=22),
-                         ft.Text("Пользователь не найден :(", color=ft.Colors.GREY_500, size=14)],
-                        spacing=8,
-                    ),
+                    content=ft.Row([
+                        ft.Icon(ft.Icons.PERSON_OFF, color=ft.Colors.GREY_500, size=22),
+                        ft.Text("Пользователь не найден :(", color=ft.Colors.GREY_500, size=14),
+                    ], spacing=8),
                     padding=ft.padding.symmetric(horizontal=14, vertical=10),
                 )
             search_result_container.visible = True
             page.update()
 
+        def _find_tabs():
+            try:
+                col = contact_dialog.content.content
+                for ctrl in col.controls:
+                    if isinstance(ctrl, ft.Tabs):
+                        return ctrl
+            except Exception:
+                pass
+            return None
+
+        local_results_col = ft.Column(scroll=ft.ScrollMode.ADAPTIVE, spacing=2, visible=False)
+
+        # Вставляем local_results_col в диалог после search_result_container
+        try:
+            col = contact_dialog.content.content
+            if local_results_col not in col.controls:
+                # Вставляем после search_result_container (индекс 2)
+                col.controls.insert(3, local_results_col)
+        except Exception:
+            pass
+
+        def _show_local_results(text):
+            """Ищет по имени и номеру в локальных контактах и рисует результаты."""
+            f = text.lower()
+            matched = [
+                c for c in contacts
+                if f in (c.get("username") or "").lower()
+                or f in format_phone(c.get("phone", "")).lower()
+                or f in (c.get("phone", "") or "").lower()
+            ]
+            local_results_col.controls.clear()
+            if matched:
+                local_results_col.controls.append(
+                    ft.Container(
+                        content=ft.Text("Найдено в контактах", size=12,
+                                        color=ft.Colors.GREY_500,
+                                        weight=ft.FontWeight.BOLD),
+                        padding=ft.padding.only(left=4, top=4, bottom=2),
+                    )
+                )
+                for c in matched:
+                    display = dict(c)
+                    if c.get("status_user_contact") == "not_save_user":
+                        display["username"] = format_phone(c.get("phone", "")) or c["username"]
+                    local_results_col.controls.append(
+                        create_contact_item(
+                            display,
+                            lambda e, cid=c["id"], cname=c["username"]: create_chat_func(cid, cname)
+                        )
+                    )
+            else:
+                local_results_col.controls.append(
+                    ft.Container(
+                        content=ft.Row([
+                            ft.Icon(ft.Icons.SEARCH_OFF, color=ft.Colors.GREY_400, size=18),
+                            ft.Text("Не найдено в контактах", color=ft.Colors.GREY_400, size=13),
+                        ], spacing=6),
+                        padding=ft.padding.symmetric(horizontal=4, vertical=10),
+                    )
+                )
+            local_results_col.visible = True
+
         def on_search_change(e):
-            render_contacts(e.control.value.strip())
+            text = e.control.value.strip()
+            tabs = _find_tabs()
+            if text:
+                if tabs:
+                    tabs.visible = False
+                if search_result_container:
+                    search_result_container.visible = False
+                _show_local_results(text)
+            else:
+                if tabs:
+                    tabs.visible = True
+                local_results_col.visible = False
+                local_results_col.controls.clear()
+            page.update()
 
         def on_search_submit(e):
             value = e.control.value.strip()
             if not value:
                 return
-            contact_list.controls.clear()
             if search_result_container:
                 search_result_container.content = None
                 search_result_container.visible = False
@@ -318,7 +418,13 @@ def setup_handlers(page, db_path, contacts, chats,
         search_field.value = ""
         search_field.on_change = on_search_change
         search_field.on_submit = on_search_submit
-        render_contacts()
+        # Сбрасываем состояние при открытии
+        local_results_col.controls.clear()
+        local_results_col.visible = False
+        tabs = _find_tabs()
+        if tabs:
+            tabs.visible = True
+        _refresh_columns()
 
         contact_dialog.actions = [
             ft.TextButton("Отмена",

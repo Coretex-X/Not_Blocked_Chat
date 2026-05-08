@@ -59,6 +59,161 @@ Chat_Test__
                 main.py
                 path.py
 
+//main.py
+import flet as ft
+import sqlite3 as ql
+import path
+from app.menu import main_menu
+from app.settings import settings_view
+from app.registration import main_registartion
+from app.sign_up import main_sign_up
+from app.chat import chat_view
+
+db_path = f"{path.db_path()}user_data.db"
+
+# Создаём таблицы при первом запуске
+with ql.connect(db_path) as con:
+    cur = con.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS users_data(
+            id_user INTEGER,
+            name TEXT,
+            profile TEXT,
+            number TEXT,
+            token TEXT,
+            avatar TEXT)
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS user_settings(
+            authorization TEXT DEFAULT 'false',
+            color_theme TEXT DEFAULT 'light',
+            language TEXT DEFAULT 'ru'
+        )
+    """)
+
+with ql.connect(db_path) as con:
+    cur = con.cursor()
+    cur.execute("SELECT authorization FROM user_settings LIMIT 1")
+    row = cur.fetchone()
+    is_authorized = (row[0] if row else 'false') == 'true'
+
+
+def main(page: ft.Page):
+    def route_change(route):
+        page.views.clear()
+        page.views.append(main_menu(page))
+
+        if not is_authorized:
+            page.views.append(main_sign_up(page))
+
+        if page.route == "/main":
+            page.views.append(main_menu(page))
+        elif page.route == "/settings":
+            page.views.append(settings_view(page))
+        elif page.route == "/registration":
+            page.views.append(main_registartion(page))
+        elif page.route == "/login":
+            page.views.append(main_sign_up(page))
+        elif page.route == "/chat":
+            page.views.append(chat_view(page))
+
+        page.update()
+
+    def view_pop(view):
+        page.views.pop()
+        page.go(page.views[-1].route)
+
+    page.on_route_change = route_change
+    page.go(page.route)
+
+
+ft.app(main)
+
+
+//app/chat.py
+import flet as ft
+import path
+from .components.chat.chat_manager import get_chat_id, get_status_chat
+from .components.chat import chat_db as db
+from .components.chat import chat_connection as conn
+from .components.database import get_contact_id_by_chat, get_contact_display_name
+from .components.chat.chat_ui import ChatUI
+from .components.utils import format_phone
+
+
+def chat_view(page: ft.Page) -> ft.View:
+    db_path    = f"{path.db_path()}user_data.db"
+    chat_id    = get_chat_id()
+    status     = get_status_chat()
+    contact_id = get_contact_id_by_chat(db_path, chat_id)
+    my_id      = db.get_current_user_id()
+    contact    = db.get_contact_data(contact_id) if contact_id else None
+
+    if contact is None:
+        contact_name  = "Неизвестный"
+        contact_phone = "—"
+        contact_about = "—"
+    else:
+        contact_name  = get_contact_display_name(db_path, contact_id)
+        contact_phone = format_phone(str(contact[3]))
+        contact_about = contact[2]
+
+    contact_user = {
+        "id":           contact_id,
+        "name":         contact_name,
+        "avatar_color": ft.Colors.GREY,
+        "phone":        contact_phone,
+        "about":        contact_about,
+        "last_seen":    "None",
+    }
+    current_user = {
+        "id":           my_id,
+        "name":         "None",
+        "avatar_color": ft.Colors.GREY,
+        "phone":        "None",
+        "status":       "None",
+        "about":        "None",
+    }
+
+    conn.start_connection(my_id, contact_id, status)
+    ui = ChatUI(page, current_user, contact_user)
+
+    page.overlay.append(ui.file_picker)
+    page.update()
+
+    # Колбэки для входящих сообщений (используются извне при необходимости)
+    page.data = {
+        "add_incoming_text": lambda text, sid=None: ui.add_message_to_chat(
+            ui.create_text_message(text, is_user=(sid == my_id))),
+        "add_incoming_image": lambda path, name, sid=None, ot=False: ui.add_message_to_chat(
+            ui.create_image_message(path, name, is_user=(sid == my_id), one_time_view=ot)),
+        "add_incoming_video": lambda path, name, sid=None: ui.add_message_to_chat(
+            ui.create_video_message(path, name, is_user=(sid == my_id))),
+        "add_incoming_audio": lambda path, name, sid=None: ui.add_message_to_chat(
+            ui.create_audio_message(path, name, is_user=(sid == my_id))),
+        "add_incoming_document": lambda path, name, sid=None, ftype="Файл": ui.add_message_to_chat(
+            ui.create_document_message(path, name, ftype, is_user=(sid == my_id))),
+    }
+
+    ui.poll_queue()
+
+    return ft.View(
+        "/chat",
+        controls=[ft.Container(
+            expand=True,
+            content=ft.Column([
+                ui.chat_header,
+                ft.Container(content=ui.messages_column, expand=True,
+                             padding=10, bgcolor=ft.Colors.GREY_100),
+                ui.voice_panel,
+                ui.input_bar,
+            ], expand=True),
+        )],
+        padding=0,
+        bgcolor=ft.Colors.WHITE,
+    )
+
+
 //app/menu.py
 import flet as ft
 import path
@@ -81,9 +236,11 @@ def main_menu(page: ft.Page) -> ft.View:
     chats     = load_chats(db)
     user_data = get_user_data(db)
 
-    exit_dlg                                               = create_exit_dialog()
-    contact_dialog, contact_list, search_field, \
-        loading_container, search_result_container         = create_contact_dialog()
+    exit_dlg = create_exit_dialog()
+
+    (contact_dialog, contact_list, search_field,
+     loading_container, search_result_container,
+     not_saved_col, saved_col, delete_btn_row) = create_contact_dialog()
 
     chats_col     = ft.Column(scroll=ft.ScrollMode.ADAPTIVE, spacing=2, expand=True)
     favorites_col = ft.Column(scroll=ft.ScrollMode.ADAPTIVE, spacing=2, expand=True)
@@ -97,7 +254,8 @@ def main_menu(page: ft.Page) -> ft.View:
     # ── Вспомогательная: статус контакта по chat ──────────────────────────────
 
     def _contact_status_map():
-        return {c["id"]: c.get("status_user_contact", "save_user") for c in contacts}
+        fresh_contacts = load_contacts(db)
+        return {c["id"]: c.get("status_user_contact", "save_user") for c in fresh_contacts}
 
     def _make_chat_item(chat, status_map):
         display = dict(chat)
@@ -127,8 +285,9 @@ def main_menu(page: ft.Page) -> ft.View:
         )
 
     def update_chats_list():
-        nonlocal chats
-        chats = load_chats(db)
+        nonlocal chats, contacts
+        chats    = load_chats(db)
+        contacts = load_contacts(db)
         chats_col.controls.clear()
         smap = _contact_status_map()
         if chats:
@@ -155,6 +314,8 @@ def main_menu(page: ft.Page) -> ft.View:
         page.update()
 
     def update_contacts_tab():
+        nonlocal contacts
+        contacts = load_contacts(db)
         contacts_col.controls.clear()
         if not contacts:
             contacts_col.controls.append(
@@ -191,6 +352,9 @@ def main_menu(page: ft.Page) -> ft.View:
                 cid, cname, update_chats_list, handlers['open_existing_chat'], contact_dialog
             ),
             loading_container, search_result_container,
+            not_saved_col=not_saved_col,
+            saved_col=saved_col,
+            delete_btn_row=delete_btn_row,
         )
 
     new_chat_fab.on_click  = open_new_chat_dialog
@@ -299,6 +463,649 @@ def main_menu(page: ft.Page) -> ft.View:
     )
 
 
+
+//app/registration.py
+import flet as ft
+import httpx as hx
+import json as js
+import requests as rq
+
+
+def main_registartion(page: ft.Page):
+    page.title = "Регистрация"
+    page.vertical_alignment = ft.MainAxisAlignment.CENTER
+    page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
+
+    # Переменные для валидации
+    required_fields = []
+    error_text = ft.Text(color="red", visible=False)
+
+    def validate_fields():
+        # Проверяем все обязательные поля
+        for field in required_fields:
+            if not field.value:
+                field.error_text = "Это поле обязательно для заполнения"
+                field.update()
+                return False
+            
+        return True
+
+    def validate_password():
+        if text_input_password.value != text_input_password_clon.value:
+            text_input_password.error_text = "Пароли не совпадают"
+            text_input_password_clon.error_text = "Пароли не совпадают"
+            text_input_password.update()
+            text_input_password_clon.update()
+            return False
+        return True
+
+    async def rest_api(e):
+        # Сбрасываем ошибки
+        error_text.visible = False
+        error_text.update()
+        
+        for field in required_fields:
+            field.error_text = None
+            field.update()
+
+        # Валидация
+        if not validate_fields():
+            return
+            
+        if not validate_password():
+            return
+
+        #Удаляем первые 1-2 символа по условию
+        phone_number = text_input_number.value
+        if len(phone_number) == 11:
+            phone_number = phone_number[1:]  # удаляем первый символ
+        elif len(phone_number) == 12:
+            phone_number = phone_number[2:]  # удаляем первые два символа
+        # Подготовка данных
+        data = {
+            'login': text_input_login.value,
+            'email': text_input_email.value,
+            'number': phone_number,
+            'password': text_input_password.value
+        }
+
+        try:
+            # Отправка на сервер
+            async with hx.AsyncClient() as client:
+                response = await client.post(
+                    'http://127.0.0.1:5000/api/v2/user/registration/',
+                    json=data
+                )
+                
+            if response.status_code == 200:
+                    # Очистка полей после успешной отправки
+                    text_input_login.value = ""
+                    text_input_email.value = ""
+                    text_input_password.value = ""
+                    text_input_password_clon.value = ""
+                    page.go('/login')
+                    page.update()
+            else:
+                    error_text.value = f"Ошибка сервера: {response.text}"
+                    error_text.visible = True
+                    error_text.update()
+                    
+        except Exception as ex:
+            error_text.value = f"Ошибка соединения с сервером :("
+            print(f"Ошибка при отправке данных: {ex}")
+            error_text.visible = True
+            error_text.update()
+
+    # Элементы интерфейса
+    label = ft.Text('Регистрация:', size=30)
+    
+    text_input_login = ft.TextField(
+        label='Имя пользователя',
+        autofocus=True
+    )
+    
+    text_input_email = ft.TextField(
+        label='E-Mail'
+    )
+
+    text_input_number = ft.TextField(
+        label='Телефон')
+    
+    text_input_password = ft.TextField(
+        label='Пароль',
+        password=True,
+        can_reveal_password=True
+    )
+    
+    text_input_password_clon = ft.TextField(
+        label='Повторите пароль',
+        password=True,
+        can_reveal_password=True
+    )
+    
+    button = ft.ElevatedButton(
+        'Зарегистрироваться',
+        on_click=rest_api
+    )
+
+    or_sign_up = ft.Text('Есть аккаунт?')
+
+    button_sign_up = ft.ElevatedButton(
+        'Войти',
+        on_click= lambda _: page.go('/login')
+    )
+
+
+    # Добавляем поля в список обязательных
+    required_fields = [
+        text_input_login,
+        text_input_email,
+        text_input_number,
+        text_input_password,
+        text_input_password_clon
+    ]
+
+    # Собираем интерфейс
+    return ft.View(
+        "/registration",
+        [
+            ft.Container(
+                ft.Column(
+                    [
+                        ft.Container(label, margin=5),
+                        ft.Container(text_input_login, margin=5),
+                        ft.Container(text_input_email, margin=5),
+                        ft.Container(text_input_number, margin=5),
+                        ft.Container(text_input_password, margin=5),
+                        ft.Container(text_input_password_clon, margin=5),
+                        ft.Container(error_text, margin=5),
+                        ft.Container(button, margin=5, alignment=ft.alignment.center),
+                        ft.Container(or_sign_up, margin=5, alignment=ft.alignment.center),
+                        ft.Container(button_sign_up, margin=5, alignment=ft.alignment.center)
+                    ],
+                    alignment=ft.MainAxisAlignment.CENTER,
+                    width=400
+                ),
+                expand=True,
+                alignment=ft.alignment.center
+            )
+        ],
+        # appbar=appbar,
+        # navigation_bar=navigation_bar
+    )
+
+
+
+//app/settings.py
+import flet as ft
+import sqlite3 as sql
+import path
+
+db_path = f"{path.db_path()}user_data.db"
+
+
+# ── БД: миграция и чтение/запись настроек ────────────────────────────────────
+
+def _migrate_settings():
+    """Добавляет колонки theme и font_size если их нет."""
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+        for col, default in [("theme", "dark"), ("font_size", "14")]:
+            try:
+                cur.execute(f"ALTER TABLE user_settings ADD COLUMN {col} TEXT DEFAULT '{default}'")
+            except sql.OperationalError:
+                pass
+        con.commit()
+
+
+def _load_settings() -> dict:
+    _migrate_settings()
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+        try:
+            cur.execute("SELECT theme, font_size FROM user_settings LIMIT 1")
+            row = cur.fetchone()
+            if row:
+                return {"theme": row[0] or "dark", "font_size": int(row[1] or 14)}
+        except sql.OperationalError:
+            pass
+    return {"theme": "dark", "font_size": 14}
+
+
+def _save_setting(key: str, value: str):
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+        cur.execute(f"UPDATE user_settings SET {key} = ?", (value,))
+        con.commit()
+
+
+def _load_user() -> dict:
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+        try:
+            cur.execute("SELECT name, profile, number, avatar FROM users_data LIMIT 1")
+            row = cur.fetchone()
+            if row:
+                return {"name": row[0] or "", "profile": row[1] or "",
+                        "number": row[2] or "", "avatar": row[3] or ""}
+        except sql.OperationalError:
+            pass
+    return {"name": "", "profile": "", "number": "", "avatar": ""}
+
+
+# ── Главный вид ───────────────────────────────────────────────────────────────
+
+def settings_view(page: ft.Page) -> ft.View:
+    settings = _load_settings()
+    user     = _load_user()
+
+    # ── Диалог редактирования профиля ─────────────────────────────────────────
+
+    f_name    = ft.TextField(label="Имя",    value=user["name"],    border_radius=10)
+    f_number  = ft.TextField(label="Номер",  value=user["number"],  border_radius=10,
+                             keyboard_type=ft.KeyboardType.PHONE)
+    f_profile = ft.TextField(label="Профиль / статус", value=user["profile"], border_radius=10)
+
+    def _save_profile(e):
+        # Поля заполнены — логика сохранения будет добавлена позже
+        edit_dlg.open = False
+        page.update()
+
+    edit_dlg = ft.AlertDialog(
+        modal=True,
+        title=ft.Text("Редактировать профиль"),
+        content=ft.Container(
+            content=ft.Column(
+                [
+                    ft.Stack(
+                        [
+                            ft.Container(
+                                content=ft.CircleAvatar(
+                                    foreground_image_src="image/user.png",
+                                    radius=45,
+                                ),
+                                alignment=ft.alignment.center,
+                            ),
+                            ft.Container(
+                                content=ft.IconButton(
+                                    ft.Icons.ADD_A_PHOTO,
+                                    icon_color=ft.Colors.WHITE,
+                                    icon_size=18,
+                                    style=ft.ButtonStyle(
+                                        bgcolor=ft.Colors.BLUE,
+                                        shape=ft.CircleBorder(),
+                                        padding=ft.padding.all(4),
+                                    ),
+                                    on_click=lambda e: None,  # будет добавлено позже
+                                ),
+                                alignment=ft.alignment.bottom_right,
+                                right=55, bottom=0,
+                            ),
+                        ],
+                        width=120, height=100,
+                    ),
+                    f_name,
+                    f_number,
+                    f_profile,
+                ],
+                spacing=12,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                tight=True,
+            ),
+            width=300,
+            padding=ft.padding.only(top=8),
+        ),
+        actions=[
+            ft.TextButton("Сохранить",
+                          style=ft.ButtonStyle(color=ft.Colors.GREEN),
+                          on_click=_save_profile),
+            ft.TextButton("Отмена",
+                          on_click=lambda e: (setattr(edit_dlg, "open", False), page.update())),
+        ],
+    )
+    page.overlay.append(edit_dlg)
+
+    def _open_edit(e):
+        edit_dlg.open = True
+        page.update()
+
+    # ── Шапка профиля ─────────────────────────────────────────────────────────
+
+    profile_header = ft.Container(
+        content=ft.Column(
+            [
+                ft.Stack(
+                    [
+                        ft.Container(
+                            content=ft.CircleAvatar(
+                                foreground_image_src="image/user.png",
+                                radius=50,
+                            ),
+                            alignment=ft.alignment.center,
+                        ),
+                        ft.Container(
+                            content=ft.IconButton(
+                                ft.Icons.EDIT,
+                                icon_color=ft.Colors.WHITE,
+                                icon_size=16,
+                                tooltip="Редактировать профиль",
+                                style=ft.ButtonStyle(
+                                    bgcolor=ft.Colors.BLUE_600,
+                                    shape=ft.CircleBorder(),
+                                    padding=ft.padding.all(4),
+                                ),
+                                on_click=_open_edit,
+                            ),
+                            alignment=ft.alignment.bottom_right,
+                            right=0, bottom=0,
+                        ),
+                    ],
+                    width=110, height=105,
+                ),
+                ft.Text(user["name"] or "Пользователь",
+                        weight=ft.FontWeight.BOLD, size=22,
+                        text_align=ft.TextAlign.CENTER),
+                ft.Text(user["profile"] or "",
+                        size=14, color=ft.Colors.GREY,
+                        text_align=ft.TextAlign.CENTER),
+            ],
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            spacing=8,
+        ),
+        alignment=ft.alignment.center,
+        padding=ft.padding.symmetric(vertical=20),
+    )
+
+    # ── Смена темы ────────────────────────────────────────────────────────────
+
+    is_dark = settings["theme"] == "dark"
+
+    theme_label = ft.Text(
+        "Тёмная тема" if is_dark else "Светлая тема",
+        size=14, color=ft.Colors.GREY,
+    )
+
+    def _toggle_theme(e):
+        nonlocal is_dark
+        is_dark = e.control.value
+        new_theme = "dark" if is_dark else "light"
+        _save_setting("theme", new_theme)
+        theme_label.value = "Тёмная тема" if is_dark else "Светлая тема"
+        page.theme_mode = ft.ThemeMode.DARK if is_dark else ft.ThemeMode.LIGHT
+        page.update()
+
+    theme_row = ft.Container(
+        content=ft.Row(
+            [
+                ft.Icon(ft.Icons.DARK_MODE, color=ft.Colors.GREY),
+                ft.Column(
+                    [
+                        ft.Text("Тема оформления", size=16, weight=ft.FontWeight.W_500),
+                        theme_label,
+                    ],
+                    spacing=2, expand=True,
+                ),
+                ft.Switch(
+                    value=is_dark,
+                    on_change=_toggle_theme,
+                    active_track_color=ft.Colors.BLUE_700,
+                    thumb_color=ft.Colors.WHITE,
+                    inactive_track_color=ft.Colors.GREY,
+                ),
+            ],
+            spacing=14,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        ),
+        padding=ft.padding.symmetric(horizontal=16, vertical=12),
+        border_radius=12,
+    )
+
+    # ── Размер шрифта ─────────────────────────────────────────────────────────
+
+    font_size_val = settings["font_size"]
+    font_preview  = ft.Text(
+        "Пример текста сообщения",
+        size=font_size_val,
+        color=ft.Colors.GREY,
+        text_align=ft.TextAlign.CENTER,
+    )
+    font_size_lbl = ft.Text(f"{font_size_val} px", size=13, color=ft.Colors.GREY)
+
+    def _change_font(e):
+        val = int(e.control.value)
+        _save_setting("font_size", str(val))
+        font_preview.size   = val
+        font_size_lbl.value = f"{val} px"
+        page.update()
+
+    font_row = ft.Container(
+        content=ft.Column(
+            [
+                ft.Row(
+                    [
+                        ft.Icon(ft.Icons.TEXT_FIELDS, color=ft.Colors.GREY),
+                        ft.Column(
+                            [
+                                ft.Text("Размер шрифта", size=16, weight=ft.FontWeight.W_500),
+                                font_size_lbl,
+                            ],
+                            spacing=2, expand=True,
+                        ),
+                    ],
+                    spacing=14,
+                ),
+                ft.Slider(
+                    value=font_size_val,
+                    min=11, max=22, divisions=11,
+                    label="{value} px",
+                    active_color=ft.Colors.BLUE_700,
+                    on_change=_change_font,
+                ),
+                ft.Container(
+                    content=font_preview,
+                    alignment=ft.alignment.center,
+                    padding=ft.padding.symmetric(vertical=4),
+                ),
+            ],
+            spacing=4,
+        ),
+        padding=ft.padding.symmetric(horizontal=16, vertical=12),
+        border_radius=12,
+    )
+
+    # ── Сборка ────────────────────────────────────────────────────────────────
+
+    content = ft.Column(
+        controls=[
+            profile_header,
+            ft.Divider(height=1),
+            ft.Container(
+                content=ft.Column(
+                    [
+                        theme_row,
+                        ft.Divider(height=1, color=ft.Colors.OUTLINE_VARIANT),
+                        font_row,
+                    ],
+                    spacing=0,
+                ),
+                margin=ft.margin.symmetric(horizontal=8, vertical=8),
+                border_radius=14,
+                border=ft.border.all(1, ft.Colors.OUTLINE_VARIANT),
+            ),
+        ],
+        expand=True,
+        spacing=0,
+        scroll=ft.ScrollMode.ADAPTIVE,
+    )
+
+    appbar = ft.AppBar(
+        leading=ft.IconButton(ft.Icons.CHEVRON_LEFT, on_click=lambda _: page.go("/")),
+        leading_width=40,
+        title=ft.Text("Настройки"),
+        center_title=False,
+        bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
+    )
+
+    return ft.View(
+        "/settings",
+        appbar=appbar,
+        controls=[content],
+    )
+
+
+
+//app/sign_up.py
+import flet as ft
+import httpx as hx
+import sqlite3 as ql
+import json as js
+import path
+
+db_path = f"{path.db_path()}user_data.db" 
+json_path = f"{path.db_path}config/config.jsonc"
+
+def main_sign_up(page: ft.Page):
+    page.title = "Авторизацыя"
+    #page.theme_mode = data["theme"]
+    page.vertical_alignment = ft.MainAxisAlignment.CENTER
+    page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
+
+    # Переменные для валидации
+    required_fields = []
+    error_text = ft.Text(color="red", visible=False)
+
+    def validate_fields():
+        # Проверяем все обязательные поля
+        for field in required_fields:
+            if not field.value:
+                field.error_text = "Это поле обязательно для заполнения"
+                field.update()
+                return False
+        return True
+
+    async def rest_api(e):
+        # Сбрасываем ошибки
+        error_text.visible = False
+        error_text.update()
+        
+        for field in required_fields:
+            field.error_text = None
+            field.update()
+
+        # Валидация
+        if not validate_fields():
+            return
+            
+        # Подготовка данных
+        data = {
+            'login': text_input_login.value,
+            'password': text_input_password.value
+        }
+
+        #try:
+            # Отправка на сервер
+        async with hx.AsyncClient() as client:
+                response = await client.post(
+                    'http://127.0.0.1:5000/api/v2/user/login/',
+                    json=data
+                )
+                
+        if response.status_code == 200:
+            json_response = response.json()
+            # Извлекаем данные из ответа
+            id_user = json_response["id_users"]
+            name = json_response["login"]
+            number = json_response["number"]
+            token = json_response["token"]
+            profil = json_response["profil"]
+            authorization = "true"
+            
+            with ql.connect(db_path) as con:
+                cur = con.cursor()
+                cur.execute("DELETE FROM user_settings")
+                cur.execute("DELETE FROM users_data")
+                cur.execute(
+                    "INSERT INTO users_data (id_user, name, profile, number, token) VALUES (?, ?, ?, ?, ?)",
+                    (id_user, name, profil, number, token)
+                )
+                cur.execute(
+                    "INSERT INTO user_settings (authorization) VALUES (?)",
+                    (authorization,)
+                )
+                # Очистка полей после успешной отправки
+                text_input_login.value = ""
+                text_input_password.value = ""
+                #Перенапровляем на главную страницу
+                page.go('/main')
+                page.update()
+            cur.close()
+
+        else:
+            error_text.value = f"Error:{response}"
+            error_text.visible = True
+            error_text.update()
+
+    # Элементы интерфейса
+    label = ft.Text('Авторизация:', size=30)
+    
+    text_input_login = ft.TextField(
+        label='Имя пользователя',
+        autofocus=True
+    )
+    
+    text_input_password = ft.TextField(
+        label='Пароль',
+        password=True,
+        can_reveal_password=True
+    )
+      
+    button = ft.ElevatedButton(
+        'Войти',
+        on_click=rest_api
+    )
+    
+    or_redistration = ft.Text('Нет аккаунта?')
+
+    button_registration = ft.ElevatedButton(
+        'Зарегистрироватся',
+        on_click= lambda _: page.go('/registration')
+    )
+
+    # Добавляем поля в список обязательных
+    required_fields = [
+        text_input_login,
+        text_input_password
+    ]
+
+    # Собираем интерфейс
+    return ft.View(
+    "/login",
+    [
+        ft.Container(
+            ft.Column(
+                [
+                    ft.Container(label, margin=5),
+                    ft.Container(text_input_login, margin=5),
+                    ft.Container(text_input_password, margin=5),
+                    ft.Container(error_text, margin=5),
+                    ft.Container(button, margin=5, alignment=ft.alignment.center),
+                    ft.Container(or_redistration, margin=5, alignment=ft.alignment.center),
+                    ft.Container(button_registration, margin=5, alignment=ft.alignment.center)
+                ],
+                alignment=ft.MainAxisAlignment.CENTER,
+                width=400
+            ),
+            expand=True,  # Растягиваем на весь доступный размер
+            alignment=ft.alignment.center  # Центрируем содержимое
+        )
+    ],
+    # appbar=appbar,  # раскомментируйте если нужно
+    # navigation_bar=navigation_bar  # раскомментируйте если нужно
+    )
+
+
+
+
 //app/components/database.py
 import sqlite3 as sql
 from datetime import datetime
@@ -396,6 +1203,41 @@ def save_contact_if_not_exists(db_path: str, contact_id, username, phone="") -> 
         )
         con.commit()
         return True
+
+
+def save_contact_name(db_path: str, contact_id, name: str) -> bool:
+    """Сохраняет имя контакту и меняет статус на save_user."""
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+        cur.execute(
+            "UPDATE contacts SET username = ?, status_user_contact = 'save_user' "
+            "WHERE user_id = ?",
+            (name, contact_id)
+        )
+        # Обновляем имя чата тоже
+        cur.execute(
+            "UPDATE chats SET chat_name = ? WHERE contact_id = ?",
+            (name, contact_id)
+        )
+        con.commit()
+        return cur.rowcount > 0
+
+
+def delete_not_saved_contacts(db_path: str) -> int:
+    """Удаляет все контакты со статусом not_save_user и их чаты. Возвращает кол-во удалённых."""
+    with sql.connect(db_path) as con:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT user_id FROM contacts WHERE status_user_contact = 'not_save_user'"
+        )
+        ids = [r[0] for r in cur.fetchall()]
+        if not ids:
+            return 0
+        placeholders = ",".join("?" * len(ids))
+        cur.execute(f"DELETE FROM chats WHERE contact_id IN ({placeholders})", ids)
+        cur.execute(f"DELETE FROM contacts WHERE user_id IN ({placeholders})", ids)
+        con.commit()
+        return len(ids)
 
 
 def get_contact_display_name(db_path: str, contact_id) -> str:
@@ -511,36 +1353,97 @@ def create_exit_dialog() -> ft.AlertDialog:
 
 
 def create_contact_dialog():
-    """Диалог выбора/поиска контакта. Возвращает (dialog, contact_list, search_field, loading_container, result_container)."""
-    search_field = ft.TextField(
-        label="Поиск пользователя по номеру",
-        prefix_icon=ft.Icons.SEARCH,
-        border_radius=20,
+    """
+    Диалог выбора/поиска контакта с двумя вкладками.
+    При вводе в поиск — вкладки скрываются.
+    Возвращает (dialog, contact_list, search_field, loading_container,
+                result_container, not_saved_col, saved_col, delete_btn_row)
+    """
+    saved_col = ft.Column(scroll=ft.ScrollMode.ADAPTIVE, spacing=2, expand=True)
+    not_saved_col = ft.Column(scroll=ft.ScrollMode.ADAPTIVE, spacing=2, expand=True)
+
+    delete_btn_row = ft.Row(
+        controls=[],
+        alignment=ft.MainAxisAlignment.CENTER,
+        visible=False,
     )
+
+    inner_tabs = ft.Tabs(
+        selected_index=0,
+        animation_duration=200,
+        expand=True,
+        tab_alignment=ft.TabAlignment.FILL,
+        tabs=[
+            ft.Tab(
+                text="Сохранённые",
+                content=ft.Container(
+                    content=saved_col,
+                    padding=ft.padding.only(top=8),
+                    expand=True,
+                ),
+            ),
+            ft.Tab(
+                text="Не сохранённые",
+                content=ft.Container(
+                    content=ft.Column(
+                        [not_saved_col, delete_btn_row],
+                        spacing=6,
+                        expand=True,
+                    ),
+                    padding=ft.padding.only(top=8),
+                    expand=True,
+                ),
+            ),
+        ],
+    )
+
     loading_container = ft.Container(
         content=ft.ProgressRing(width=32, height=32, stroke_width=3, visible=False),
         alignment=ft.alignment.center,
         padding=ft.padding.symmetric(vertical=10),
         visible=False,
     )
+
     search_result_container = ft.Container(visible=False)
-    contact_list = ft.Column(scroll=ft.ScrollMode.ADAPTIVE, spacing=2)
+
+    def on_search_change(e):
+        has_text = bool(e.control.value.strip())
+        inner_tabs.visible = not has_text
+        e.control.page.update()
+
+    search_field = ft.TextField(
+        label="Поиск пользователя по номеру",
+        prefix_icon=ft.Icons.SEARCH,
+        border_radius=20,
+        on_change=on_search_change,
+    )
+
+    # contact_list для совместимости
+    contact_list = ft.Column(scroll=ft.ScrollMode.ADAPTIVE, spacing=2, visible=False)
 
     dialog = ft.AlertDialog(
         title=ft.Text("Выберите контакт для чата"),
         content=ft.Container(
             content=ft.Column(
-                [search_field, loading_container, search_result_container, contact_list],
-                spacing=10,
+                [
+                    search_field,
+                    loading_container,
+                    search_result_container,
+                    inner_tabs,
+                ],
+                spacing=8,
+                expand=True,
             ),
             width=float("inf"),
-            height=400,
+            height=460,
             expand=True,
         ),
         actions=[ft.TextButton("Отмена", on_click=None)],
         inset_padding=ft.padding.symmetric(horizontal=16, vertical=24),
     )
-    return dialog, contact_list, search_field, loading_container, search_result_container
+
+    return (dialog, contact_list, search_field, loading_container,
+            search_result_container, not_saved_col, saved_col, delete_btn_row)
 
 
 
@@ -553,6 +1456,7 @@ import flet as ft
 from .database import (
     load_chats, delete_chat, create_new_chat,
     save_contact_if_not_exists, toggle_chat_favorite, delete_user_and_contacts,
+    save_contact_name, get_contact_id_by_chat, delete_not_saved_contacts,
 )
 from .ui_components import create_contact_item
 from .utils import format_phone
@@ -560,7 +1464,6 @@ from .chat.chat_manager import set_chat_id, set_status_chat
 
 
 def search_user_by_phone(number: str) -> dict | None:
-    """Поиск пользователя по номеру через сервер."""
     digits = ''.join(filter(str.isdigit, str(number)))
     if len(digits) == 11:
         digits = digits[1:]
@@ -582,18 +1485,6 @@ def _soon_dialog(page: ft.Page) -> None:
         actions=[ft.TextButton("OK", on_click=lambda e: (setattr(dlg, 'open', False), page.update()))],
     )
     page.dialog = dlg
-    dlg.open = True
-    page.update()
-
-
-def _wip_dialog(page: ft.Page, title: str, text: str) -> None:
-    dlg = ft.AlertDialog(
-        modal=True,
-        title=ft.Text(title),
-        content=ft.Text(text),
-        actions=[ft.TextButton("OK", on_click=lambda e: (setattr(dlg, 'open', False), page.update()))],
-    )
-    page.overlay.append(dlg)
     dlg.open = True
     page.update()
 
@@ -639,68 +1530,198 @@ def setup_handlers(page, db_path, contacts, chats,
             update_fn()
 
         elif action == "save_contact":
-            _wip_dialog(page, "В разработке", "Сохранение контакта будет добавлено позже")
+            contact_id = get_contact_id_by_chat(db_path, chat_id)
+            if not contact_id:
+                return
+
+            name_field = ft.TextField(label="Имя контакта", autofocus=True, border_radius=10)
+
+            def _do_save(e):
+                name = name_field.value.strip()
+                if not name:
+                    name_field.error_text = "Введите имя"
+                    page.update()
+                    return
+                save_contact_name(db_path, contact_id, name)
+                save_dlg.open = False
+                page.update()
+                update_fn()
+
+            save_dlg = ft.AlertDialog(
+                modal=True,
+                title=ft.Text("Сохранить контакт"),
+                content=ft.Container(
+                    content=ft.Column([
+                        ft.Text("Введите имя для этого контакта:", size=14, color=ft.Colors.GREY),
+                        name_field,
+                    ], spacing=10, tight=True),
+                    width=300,
+                ),
+                actions=[
+                    ft.TextButton("Сохранить", style=ft.ButtonStyle(color=ft.Colors.GREEN),
+                                  on_click=_do_save),
+                    ft.TextButton("Отмена",
+                                  on_click=lambda e: (setattr(save_dlg, 'open', False), page.update())),
+                ],
+            )
+            page.overlay.append(save_dlg)
+            save_dlg.open = True
+            page.update()
 
         elif action == "edit_contact":
-            _wip_dialog(page, "В разработке", "Редактирование контакта будет добавлено позже")
+            contact_id = get_contact_id_by_chat(db_path, chat_id)
+            if not contact_id:
+                return
+
+            name_field = ft.TextField(label="Новое имя контакта", autofocus=True, border_radius=10)
+
+            def _do_edit(e):
+                name = name_field.value.strip()
+                if not name:
+                    name_field.error_text = "Введите имя"
+                    page.update()
+                    return
+                save_contact_name(db_path, contact_id, name)
+                edit_dlg.open = False
+                page.update()
+                update_fn()
+
+            edit_dlg = ft.AlertDialog(
+                modal=True,
+                title=ft.Text("Изменить контакт"),
+                content=ft.Container(
+                    content=ft.Column([
+                        ft.Text("Введите новое имя для контакта:", size=14, color=ft.Colors.GREY),
+                        name_field,
+                    ], spacing=10, tight=True),
+                    width=300,
+                ),
+                actions=[
+                    ft.TextButton("Сохранить", style=ft.ButtonStyle(color=ft.Colors.GREEN),
+                                  on_click=_do_edit),
+                    ft.TextButton("Отмена",
+                                  on_click=lambda e: (setattr(edit_dlg, 'open', False), page.update())),
+                ],
+            )
+            page.overlay.append(edit_dlg)
+            edit_dlg.open = True
+            page.update()
+
+    # ── Диалог выбора контакта ────────────────────────────────────────────────
 
     def show_contact_selection(e, contact_dialog, contact_list, search_field,
                                contacts, create_chat_func,
-                               loading_container=None, search_result_container=None):
+                               loading_container=None, search_result_container=None,
+                               not_saved_col=None, saved_col=None, delete_btn_row=None):
 
-        def render_contacts(filter_text=""):
-            contact_list.controls.clear()
-            saved    = [c for c in contacts if c.get("status_user_contact") != "not_save_user"]
-            not_saved = [c for c in contacts if c.get("status_user_contact") == "not_save_user"]
+        def _refresh_columns(filter_text=""):
+            all_contacts = contacts
+            saved     = [c for c in all_contacts if c.get("status_user_contact") != "not_save_user"]
+            not_saved = [c for c in all_contacts if c.get("status_user_contact") == "not_save_user"]
 
             if filter_text:
                 f = filter_text.lower()
-                saved     = [c for c in saved if f in c["username"].lower()]
+                saved     = [c for c in saved if f in (c["username"] or "").lower()]
                 not_saved = [c for c in not_saved
-                             if f in c["username"].lower() or f in format_phone(c.get("phone", ""))]
+                             if f in (c["username"] or "").lower()
+                             or f in format_phone(c.get("phone", ""))]
 
-            if not saved and not not_saved:
-                contact_list.controls.append(
-                    ft.Container(content=ft.Text("Нет контактов", text_align=ft.TextAlign.CENTER),
-                                 padding=20)
-                )
-            else:
+            # Колонка "Сохранённые"
+            if saved_col is not None:
+                saved_col.controls.clear()
                 if saved:
-                    contact_list.controls.append(
-                        ft.Container(
-                            content=ft.Text("Сохранённые", size=13, weight=ft.FontWeight.BOLD,
-                                            color=ft.Colors.GREY_600),
-                            padding=ft.padding.only(left=10, top=8, bottom=4),
-                        )
-                    )
                     for c in saved:
-                        contact_list.controls.append(
+                        saved_col.controls.append(
                             create_contact_item(
                                 c,
                                 lambda e, cid=c["id"], cname=c["username"]: create_chat_func(cid, cname)
                             )
                         )
-                if not_saved:
-                    contact_list.controls.append(
+                else:
+                    saved_col.controls.append(
                         ft.Container(
-                            content=ft.Text("Не сохранённые", size=13, weight=ft.FontWeight.BOLD,
-                                            color=ft.Colors.GREY_600),
-                            padding=ft.padding.only(left=10, top=12, bottom=4),
+                            content=ft.Text("Нет сохранённых контактов", size=13,
+                                            color=ft.Colors.GREY_400,
+                                            text_align=ft.TextAlign.CENTER),
+                            padding=ft.padding.symmetric(vertical=30),
+                            alignment=ft.alignment.center,
                         )
                     )
+
+            # Колонка "Не сохранённые"
+            if not_saved_col is not None:
+                not_saved_col.controls.clear()
+                if not_saved:
                     for c in not_saved:
                         c_copy = dict(c)
                         c_copy["username"] = format_phone(c.get("phone", "")) or c["username"]
-                        contact_list.controls.append(
+                        not_saved_col.controls.append(
                             create_contact_item(
                                 c_copy,
                                 lambda e, cid=c["id"], cname=c["username"]: create_chat_func(cid, cname)
                             )
                         )
+                else:
+                    not_saved_col.controls.append(
+                        ft.Container(
+                            content=ft.Text("Нет несохранённых контактов", size=13,
+                                            color=ft.Colors.GREY_400,
+                                            text_align=ft.TextAlign.CENTER),
+                            padding=ft.padding.symmetric(vertical=30),
+                            alignment=ft.alignment.center,
+                        )
+                    )
+
+            # Кнопка удаления
+            if delete_btn_row is not None:
+                delete_btn_row.controls.clear()
+                if not_saved:
+                    delete_btn_row.visible = True
+                    delete_btn_row.controls.append(
+                        ft.ElevatedButton(
+                            text=f"Удалить несохранённых ({len(not_saved)})",
+                            icon=ft.Icons.DELETE_SWEEP,
+                            color=ft.Colors.WHITE,
+                            bgcolor=ft.Colors.RED_600,
+                            on_click=_delete_not_saved,
+                        )
+                    )
+                else:
+                    delete_btn_row.visible = False
 
             if search_result_container:
                 search_result_container.content = None
                 search_result_container.visible = False
+
+            page.update()
+
+        def _delete_not_saved(e):
+            def _confirm(e):
+                confirm_dlg.open = False
+                page.update()
+                deleted = delete_not_saved_contacts(db_path)
+                if deleted > 0:
+                    update_chats_list_func()
+                    # Обновляем список внутри диалога
+                    nonlocal contacts
+                    from .database import load_contacts
+                    contacts = load_contacts(db_path)
+                    _refresh_columns()
+
+            confirm_dlg = ft.AlertDialog(
+                modal=True,
+                title=ft.Text("Удалить несохранённые контакты?"),
+                content=ft.Text("Все несохранённые контакты и их чаты будут удалены безвозвратно.",
+                                size=14),
+                actions=[
+                    ft.TextButton("Удалить", style=ft.ButtonStyle(color=ft.Colors.RED),
+                                  on_click=_confirm),
+                    ft.TextButton("Отмена",
+                                  on_click=lambda e: (setattr(confirm_dlg, 'open', False), page.update())),
+                ],
+            )
+            page.overlay.append(confirm_dlg)
+            confirm_dlg.open = True
             page.update()
 
         def show_search_result(data_user):
@@ -736,24 +1757,110 @@ def setup_handlers(page, db_path, contacts, chats,
                 search_result_container.content = card
             else:
                 search_result_container.content = ft.Container(
-                    content=ft.Row(
-                        [ft.Icon(ft.Icons.PERSON_OFF, color=ft.Colors.GREY_500, size=22),
-                         ft.Text("Пользователь не найден :(", color=ft.Colors.GREY_500, size=14)],
-                        spacing=8,
-                    ),
+                    content=ft.Row([
+                        ft.Icon(ft.Icons.PERSON_OFF, color=ft.Colors.GREY_500, size=22),
+                        ft.Text("Пользователь не найден :(", color=ft.Colors.GREY_500, size=14),
+                    ], spacing=8),
                     padding=ft.padding.symmetric(horizontal=14, vertical=10),
                 )
             search_result_container.visible = True
             page.update()
 
+        def _find_tabs():
+            try:
+                col = contact_dialog.content.content
+                for ctrl in col.controls:
+                    if isinstance(ctrl, ft.Tabs):
+                        return ctrl
+            except Exception:
+                pass
+            return None
+
+        local_results_col = ft.Column(scroll=ft.ScrollMode.ADAPTIVE, spacing=2, visible=False)
+
+        # Вставляем local_results_col в диалог после search_result_container
+        try:
+            col = contact_dialog.content.content
+            if local_results_col not in col.controls:
+                # Вставляем после search_result_container (индекс 2)
+                col.controls.insert(3, local_results_col)
+        except Exception:
+            pass
+
+        def _normalize(phone: str) -> str:
+            """Оставляет только цифры и берёт последние 10."""
+            digits = ''.join(filter(str.isdigit, phone))
+            return digits[-10:] if len(digits) >= 10 else digits
+
+        def _phone_match(query: str, phone: str) -> bool:
+            """Сравнивает нормализованные номера — работает с 89XX и +79XX."""
+            q = _normalize(query)
+            p = _normalize(phone)
+            if not q or not p:
+                return False
+            # Совпадение если один содержит другой (частичный ввод тоже работает)
+            return q in p or p in q
+
+        def _show_local_results(text):
+            """Ищет по имени и номеру в локальных контактах и рисует результаты."""
+            f = text.lower()
+            matched = [
+                c for c in contacts
+                if f in (c.get("username") or "").lower()
+                or _phone_match(text, c.get("phone", "") or "")
+            ]
+            local_results_col.controls.clear()
+            if matched:
+                local_results_col.controls.append(
+                    ft.Container(
+                        content=ft.Text("Найдено в контактах", size=12,
+                                        color=ft.Colors.GREY_500,
+                                        weight=ft.FontWeight.BOLD),
+                        padding=ft.padding.only(left=4, top=4, bottom=2),
+                    )
+                )
+                for c in matched:
+                    display = dict(c)
+                    if c.get("status_user_contact") == "not_save_user":
+                        display["username"] = format_phone(c.get("phone", "")) or c["username"]
+                    local_results_col.controls.append(
+                        create_contact_item(
+                            display,
+                            lambda e, cid=c["id"], cname=c["username"]: create_chat_func(cid, cname)
+                        )
+                    )
+            else:
+                local_results_col.controls.append(
+                    ft.Container(
+                        content=ft.Row([
+                            ft.Icon(ft.Icons.SEARCH_OFF, color=ft.Colors.GREY_400, size=18),
+                            ft.Text("Не найдено в контактах", color=ft.Colors.GREY_400, size=13),
+                        ], spacing=6),
+                        padding=ft.padding.symmetric(horizontal=4, vertical=10),
+                    )
+                )
+            local_results_col.visible = True
+
         def on_search_change(e):
-            render_contacts(e.control.value.strip())
+            text = e.control.value.strip()
+            tabs = _find_tabs()
+            if text:
+                if tabs:
+                    tabs.visible = False
+                if search_result_container:
+                    search_result_container.visible = False
+                _show_local_results(text)
+            else:
+                if tabs:
+                    tabs.visible = True
+                local_results_col.visible = False
+                local_results_col.controls.clear()
+            page.update()
 
         def on_search_submit(e):
             value = e.control.value.strip()
             if not value:
                 return
-            contact_list.controls.clear()
             if search_result_container:
                 search_result_container.content = None
                 search_result_container.visible = False
@@ -774,7 +1881,13 @@ def setup_handlers(page, db_path, contacts, chats,
         search_field.value = ""
         search_field.on_change = on_search_change
         search_field.on_submit = on_search_submit
-        render_contacts()
+        # Сбрасываем состояние при открытии
+        local_results_col.controls.clear()
+        local_results_col.visible = False
+        tabs = _find_tabs()
+        if tabs:
+            tabs.visible = True
+        _refresh_columns()
 
         contact_dialog.actions = [
             ft.TextButton("Отмена",
@@ -810,6 +1923,8 @@ def setup_handlers(page, db_path, contacts, chats,
         'open_dialog':               open_dialog,
         'soon_popup':                lambda e: _soon_dialog(page),
     }
+
+
 
 
 //app/components/ui_components.py
@@ -929,3 +2044,56 @@ def create_chat_item(chat: dict, on_click_handler, on_menu_handler=None,
         border_radius=10,
         ink=True,
     )
+
+
+
+//app/components/utils.py
+from datetime import datetime
+
+
+# Таблица транслитерации кириллицы
+_CYR_TO_LAT = {
+    'А': 'A', 'Б': 'B', 'В': 'V', 'Г': 'G', 'Д': 'D',
+    'Е': 'E', 'Ё': 'E', 'Ж': 'Z', 'З': 'Z', 'И': 'I',
+    'Й': 'I', 'К': 'K', 'Л': 'L', 'М': 'M', 'Н': 'N',
+    'О': 'O', 'П': 'P', 'Р': 'R', 'С': 'S', 'Т': 'T',
+    'У': 'U', 'Ф': 'F', 'Х': 'H', 'Ц': 'C', 'Ч': 'C',
+    'Ш': 'S', 'Щ': 'S', 'Ъ': '', 'Ы': 'Y', 'Ь': '',
+    'Э': 'E', 'Ю': 'U', 'Я': 'Y',
+}
+
+
+def format_phone(number: str) -> str:
+    """Форматирует номер телефона в вид +7 (XXX) XXX-XX-XX."""
+    if not number:
+        return ""
+    digits = ''.join(filter(str.isdigit, str(number)))
+    if len(digits) == 11:
+        digits = digits[1:]
+    if len(digits) == 10:
+        return f"+7 ({digits[0:3]}) {digits[3:6]}-{digits[6:8]}-{digits[8:10]}"
+    return str(number)
+
+
+def get_avatar_letter(name: str) -> str:
+    """Возвращает латинскую букву для аватара по первому символу имени."""
+    if not name:
+        return "U"
+    ch = name[0].upper()
+    return _CYR_TO_LAT.get(ch, ch if ch.isalpha() else 'U')
+
+
+def format_chat_time(time_string: str) -> str:
+    """Форматирует строку даты-времени в HH:MM."""
+    if not time_string:
+        return ""
+    try:
+        fmt = '%Y-%m-%d %H:%M:%S.%f' if '.' in time_string else '%Y-%m-%d %H:%M:%S'
+        return datetime.strptime(time_string, fmt).strftime('%H:%M')
+    except ValueError:
+        return ""
+
+
+все чики пуки мне понравилось но есть омент ты создала новая поле theme но нужно записывать и изминять значение в поле color_theme это первое 
+я тебе прикрипил весь мой проект и так вот он должен из бд получать зачение темы системы и по этаму значение изминять сваю тему да кароче ну ты понял
+затем наверное самое интересное это уже изминение шрифта сделай так чтобы мой проет читал тоже из бд размер шрифта и риально по таму значению каторые там он адаптировал свой шрифт нужного размера сделай это пжжжжжжжжж

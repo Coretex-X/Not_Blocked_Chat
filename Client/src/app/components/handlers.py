@@ -337,14 +337,27 @@ def setup_handlers(page, db_path, contacts, chats,
         except Exception:
             pass
 
+        def _normalize(phone: str) -> str:
+            """Оставляет только цифры и берёт последние 10."""
+            digits = ''.join(filter(str.isdigit, phone))
+            return digits[-10:] if len(digits) >= 10 else digits
+
+        def _phone_match(query: str, phone: str) -> bool:
+            """Сравнивает нормализованные номера — работает с 89XX и +79XX."""
+            q = _normalize(query)
+            p = _normalize(phone)
+            if not q or not p:
+                return False
+            # Совпадение если один содержит другой (частичный ввод тоже работает)
+            return q in p or p in q
+
         def _show_local_results(text):
             """Ищет по имени и номеру в локальных контактах и рисует результаты."""
             f = text.lower()
             matched = [
                 c for c in contacts
                 if f in (c.get("username") or "").lower()
-                or f in format_phone(c.get("phone", "")).lower()
-                or f in (c.get("phone", "") or "").lower()
+                or _phone_match(text, c.get("phone", "") or "")
             ]
             local_results_col.controls.clear()
             if matched:

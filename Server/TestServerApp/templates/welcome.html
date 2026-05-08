@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Добро пожаловать | Django</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+            max-width: 600px;
+            width: 100%;
+            transform: translateY(0);
+            transition: transform 0.3s ease;
+            animation: slideIn 0.5s ease-out;
+        }
+
+        .container:hover {
+            transform: translateY(-5px);
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 40px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            font-weight: 600;
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .content {
+            padding: 40px;
+        }
+
+        .info-box {
+            background: #f7f9fc;
+            border-left: 4px solid #667eea;
+            padding: 20px;
+            margin-bottom: 25px;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+        }
+
+        .info-box:hover {
+            background: #eef2f7;
+            transform: translateX(5px);
+        }
+
+        .info-box h3 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 1.3em;
+        }
+
+        .info-box p {
+            color: #666;
+            line-height: 1.6;
+        }
+
+        .badge {
+            display: inline-block;
+            background: #667eea;
+            color: white;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            margin-top: 10px;
+        }
+
+        .footer {
+            background: #f8f9fa;
+            padding: 20px;
+            text-align: center;
+            color: #666;
+            font-size: 0.9em;
+            border-top: 1px solid #e0e0e0;
+        }
+
+        .button {
+            display: inline-block;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 30px;
+            border-radius: 25px;
+            text-decoration: none;
+            margin-top: 15px;
+            transition: transform 0.2s ease;
+            border: none;
+            cursor: pointer;
+        }
+
+        .button:hover {
+            transform: scale(1.05);
+        }
+
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 1.8em;
+            }
+            
+            .content {
+                padding: 25px;
+            }
+            
+            .info-box h3 {
+                font-size: 1.1em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>✨ Добро пожаловать! ✨</h1>
+            <p>Ваш Django проект успешно работает</p>
+        </div>
+        
+        <div class="content">
+            <div class="info-box">
+                <h3>🚀 Сервер запущен!</h3>
+                <p>Вы успешно попали на эту страницу, которая возвращается Django сервером. Это красивая и простая HTML страница, готовая к использованию.</p>
+                <span class="badge">Django + HTML</span>
+            </div>
+            
+            <div class="info-box">
+                <h3>💡 Информация</h3>
+                <p><strong>Текущее время:</strong> <span id="current-time"></span><br>
+                <strong>User Agent:</strong> <span id="user-agent"></span><br>
+                <strong>Статус:</strong> ✅ Активен</p>
+            </div>
+            
+            <div class="info-box">
+                <h3>🎨 Особенности</h3>
+                <p>✓ Адаптивный дизайн<br>
+                ✓ Плавные анимации<br>
+                ✓ Градиентный фон<br>
+                ✓ Красивые карточки<br>
+                ✓ Готов к интеграции с Django</p>
+            </div>
+            
+            <div style="text-align: center;">
+                <button class="button" onclick="showMessage()">Нажми на меня</button>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>© 2024 Django Server | Создано с ❤️</p>
+        </div>
+    </div>
+
+    <script>
+        // Функция для обновления времени
+        function updateTime() {
+            const now = new Date();
+            const timeString = now.toLocaleString('ru-RU');
+            document.getElementById('current-time').textContent = timeString;
+        }
+        
+        // Функция для получения User Agent
+        document.getElementById('user-agent').textContent = navigator.userAgent;
+        
+        // Обновляем время каждую секунду
+        updateTime();
+        setInterval(updateTime, 1000);
+        
+        // Функция для кнопки
+        function showMessage() {
+            alert('🎉 Привет от Django сервера! Страница успешно загружена.');
+        }
+    </script>
+</body>
+</html>

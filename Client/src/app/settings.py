@@ -1,14 +1,22 @@
 import flet as ft
 import sqlite3 as sql
 import path
+import requests as http          # для HTTP-запросов
+#import config                    # глобальные константы адресов
 
 db_path = f"{path.db_path()}user_data.db"
 
+# Отправка изменённых данных пользователя (POST)
+PROFILE_UPDATE_URL =     "http://127.0.0.1:5000/search/v2/user/update_user_data/"
+
+
+# Удаление аккаунта (POST, в теле id и token)
+ACCOUNT_DELETE_URL = "http://127.0.0.1:5000/search/v2/user/delete_user/"
 
 # ── БД ───────────────────────────────────────────────────────────────────────
 
 def _migrate_settings():
-    """Добавляет font_size если нет (color_theme уже есть в main.py)."""
+    """Добавляет font_size если нет."""
     with sql.connect(db_path) as con:
         cur = con.cursor()
         try:
@@ -40,21 +48,29 @@ def _save_setting(key: str, value: str):
 
 
 def _load_user() -> dict:
+    """Возвращает словарь с данными пользователя, включая id и token."""
     with sql.connect(db_path) as con:
         cur = con.cursor()
         try:
-            cur.execute("SELECT name, profile, number, avatar FROM users_data LIMIT 1")
+            cur.execute(
+                "SELECT id_user, name, profile, number, avatar, token FROM users_data LIMIT 1"
+            )
             row = cur.fetchone()
             if row:
-                return {"name": row[0] or "", "profile": row[1] or "",
-                        "number": row[2] or "", "avatar": row[3] or ""}
+                return {
+                    "id":       row[0],
+                    "name":     row[1] or "",
+                    "profile":  row[2] or "",
+                    "number":   row[3] or "",
+                    "avatar":   row[4] or "",
+                    "token":    row[5] or "",
+                }
         except sql.OperationalError:
             pass
-    return {"name": "", "profile": "", "number": "", "avatar": ""}
+    return {"id": "", "name": "", "profile": "", "number": "", "avatar": "", "token": ""}
 
 
 def _apply_font(page: ft.Page, size: int):
-    """Обновляет размер шрифта в обеих темах страницы."""
     t = ft.TextTheme(
         body_medium=ft.TextStyle(size=size),
         body_large=ft.TextStyle(size=size + 2),
@@ -78,9 +94,82 @@ def settings_view(page: ft.Page) -> ft.View:
     f_profile = ft.TextField(label="Профиль / статус", value=user["profile"], border_radius=10)
 
     def _save_profile(e):
-        # Логика сохранения будет добавлена позже
-        edit_dlg.open = False
+        # Сброс ошибок
+        f_name.error_text = None
+        f_number.error_text = None
+        f_name.border_color = None
+        f_number.border_color = None
         page.update()
+
+        # Собираем данные (сервер ждёт login, number, status)
+        data = {
+            "id":      user["id"],
+            "token":   user["token"],
+            "login":   f_name.value.strip(),      # ← login вместо name
+            "number":  f_number.value.strip(),
+            "status":  f_profile.value.strip(),   # ← status вместо profile
+        }
+
+        try:
+            resp = http.post(PROFILE_UPDATE_URL, json=data, timeout=10)
+            body = resp.json()
+
+            # Успех (код 200)
+            if resp.status_code == 200 and body.get("post") == 200:
+                # Обновляем локальную БД
+                with sql.connect(db_path) as con:
+                    cur = con.cursor()
+                    cur.execute(
+                        "UPDATE users_data SET name=?, profile=?, number=? WHERE id_user=?",
+                        (data["login"], data["status"], data["number"], data["id"])
+                    )
+                    con.commit()
+
+                # Обновляем словарь user и UI динамически
+                user["name"]    = data["login"]
+                user["profile"] = data["status"]
+                user["number"]  = data["number"]
+                name_text.value       = data["login"] or "Пользователь"
+                profile_text.value    = data["status"] or ""
+                
+                # Закрываем диалог
+                edit_dlg.open = False
+                page.update()
+                
+                # Уведомление об успехе
+                page.snack_bar = ft.SnackBar(ft.Text("Данные изменены"), open=True)
+                page.update()
+                return
+
+            # Обработка ошибок сервера (из поля error)
+            error_msg = body.get("error", "")
+            
+            if "404_Login_already_covered" in error_msg:
+                f_name.error_text = "Имя пользователя недоступно"
+                f_name.border_color = ft.Colors.RED
+                
+            elif "404_Number_already_covered" in error_msg:
+                f_number.error_text = "Номер уже используется другим аккаунтом"
+                f_number.border_color = ft.Colors.RED
+                
+            elif "Неверный токен" in body.get("meaning", ""):
+                page.snack_bar = ft.SnackBar(
+                    ft.Text("Ошибка авторизации. Войдите заново."), open=True
+                )
+                
+            else:
+                # Другие ошибки
+                meaning = body.get("meaning", "Неизвестная ошибка")
+                page.snack_bar = ft.SnackBar(
+                    ft.Text(f"Ошибка: {meaning}"), open=True
+                )
+            page.update()
+
+        except Exception as ex:
+            page.snack_bar = ft.SnackBar(
+                ft.Text(f"Ошибка сети: {str(ex)[:100]}"), open=True
+            )
+            page.update()
 
     edit_dlg = ft.AlertDialog(
         modal=True,
@@ -136,7 +225,18 @@ def settings_view(page: ft.Page) -> ft.View:
     )
     page.overlay.append(edit_dlg)
 
-    # ── Шапка профиля ─────────────────────────────────────────────────────────
+    # ── Шапка профиля (динамические элементы) ────────────────────────────────
+
+    name_text = ft.Text(
+        user["name"] or "Пользователь",
+        weight=ft.FontWeight.BOLD, size=22,
+        text_align=ft.TextAlign.CENTER,
+    )
+    profile_text = ft.Text(
+        user["profile"] or "",
+        size=14, color=ft.Colors.GREY,
+        text_align=ft.TextAlign.CENTER,
+    )
 
     profile_header = ft.Container(
         content=ft.Column(
@@ -171,12 +271,8 @@ def settings_view(page: ft.Page) -> ft.View:
                     ],
                     width=110, height=105,
                 ),
-                ft.Text(user["name"] or "Пользователь",
-                        weight=ft.FontWeight.BOLD, size=22,
-                        text_align=ft.TextAlign.CENTER),
-                ft.Text(user["profile"] or "",
-                        size=14, color=ft.Colors.GREY,
-                        text_align=ft.TextAlign.CENTER),
+                name_text,
+                profile_text,
             ],
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             spacing=8,
@@ -245,7 +341,6 @@ def settings_view(page: ft.Page) -> ft.View:
         _save_setting("font_size", str(val))
         font_preview.size   = val
         font_size_lbl.value = f"{val} px"
-        # Применяем ко всему приложению сразу
         _apply_font(page, val)
         page.update()
 
@@ -284,6 +379,80 @@ def settings_view(page: ft.Page) -> ft.View:
         border_radius=12,
     )
 
+    # ── Удаление аккаунта ────────────────────────────────────────────────────
+
+    def _delete_account(e):
+        # Диалог подтверждения
+        confirm_dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Удаление аккаунта"),
+            content=ft.Text("Вы уверены, что хотите удалить свой аккаунт? "
+                            "Это действие необратимо."),
+            actions=[
+                ft.TextButton(
+                    "Да",
+                    style=ft.ButtonStyle(color=ft.Colors.RED),
+                    on_click=lambda _: _perform_delete()
+                ),
+                ft.TextButton(
+                    "Нет",
+                    on_click=lambda _: (
+                        setattr(confirm_dlg, "open", False),
+                        page.update()
+                    )
+                ),
+            ],
+        )
+        page.overlay.append(confirm_dlg)
+        confirm_dlg.open = True
+        page.update()
+
+    def _perform_delete():
+        # Закрываем диалог подтверждения
+        for overlay in page.overlay[:]:
+            if isinstance(overlay, ft.AlertDialog) and overlay.title and \
+               overlay.title.value == "Удаление аккаунта":
+                overlay.open = False
+                break
+
+        page.update()
+        try:
+            resp = http.post(
+                ACCOUNT_DELETE_URL,
+                json={"id": user["id"], "token": user["token"]},
+                timeout=10
+            )
+            # Проверяем успешный ответ (сервер возвращает 200 без тела)
+            if resp.status_code == 200:
+                # Удаляем локальные данные
+                from app.components.database import delete_user_and_contacts
+                delete_user_and_contacts(db_path)
+                page.go('/login')
+            else:
+                # Обрабатываем ошибки от сервера
+                try:
+                    body = resp.json()
+                    error_msg = body.get("error", "Ошибка при удалении")
+                except:
+                    error_msg = "Не удалось удалить аккаунт"
+                
+                page.snack_bar = ft.SnackBar(
+                    ft.Text(f"Ошибка: {error_msg}"),
+                    open=True,
+                )
+                page.update()
+        except Exception as ex:
+            page.snack_bar = ft.SnackBar(
+                ft.Text(f"Ошибка сети: {str(ex)[:100]}"), open=True
+            )
+            page.update()
+
+    delete_btn = ft.OutlinedButton(
+        icon=ft.Icons.DELETE_FOREVER,
+        style=ft.ButtonStyle(color=ft.Colors.RED),
+        on_click=_delete_account,
+    )
+
     # ── Сборка ────────────────────────────────────────────────────────────────
 
     content = ft.Column(
@@ -296,6 +465,22 @@ def settings_view(page: ft.Page) -> ft.View:
                         theme_row,
                         ft.Divider(height=1, color=ft.Colors.OUTLINE_VARIANT),
                         font_row,
+                        ft.Divider(height=1, color=ft.Colors.OUTLINE_VARIANT),
+                        ft.Container(
+                            content=ft.Row(
+                                [
+                                    ft.Icon(ft.Icons.WARNING, color=ft.Colors.RED),
+                                    ft.Text("Удалить акаунт", size=16,
+                                            weight=ft.FontWeight.W_500,
+                                            color=ft.Colors.RED),
+                                    ft.Container(expand=True),
+                                    delete_btn,
+                                ],
+                                spacing=14,
+                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                            ),
+                            padding=ft.padding.symmetric(horizontal=16, vertical=12),
+                        ),
                     ],
                     spacing=0,
                 ),

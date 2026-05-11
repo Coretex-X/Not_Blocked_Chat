@@ -58,7 +58,6 @@ Chat_Test__
                 |
                 main.py
                 path.py
-
 //main.py
 import flet as ft
 import sqlite3 as ql
@@ -86,19 +85,41 @@ with ql.connect(db_path) as con:
     cur.execute("""
         CREATE TABLE IF NOT EXISTS user_settings(
             authorization TEXT DEFAULT 'false',
-            color_theme TEXT DEFAULT 'light',
+            color_theme TEXT DEFAULT 'dark',
             language TEXT DEFAULT 'ru'
         )
     """)
+    # Миграция: добавляем font_size если нет
+    try:
+        cur.execute("ALTER TABLE user_settings ADD COLUMN font_size TEXT DEFAULT '14'")
+    except ql.OperationalError:
+        pass
+    con.commit()
 
+# Читаем настройки при старте
 with ql.connect(db_path) as con:
     cur = con.cursor()
-    cur.execute("SELECT authorization FROM user_settings LIMIT 1")
+    cur.execute("SELECT authorization, color_theme, font_size FROM user_settings LIMIT 1")
     row = cur.fetchone()
     is_authorized = (row[0] if row else 'false') == 'true'
+    start_theme   = row[1] if row and row[1] else 'dark'
+    start_font    = int(row[2]) if row and row[2] else 14
 
 
 def main(page: ft.Page):
+    # Применяем тему из БД
+    page.theme_mode = ft.ThemeMode.DARK if start_theme == 'dark' else ft.ThemeMode.LIGHT
+
+    # Применяем размер шрифта из БД через page.theme / page.dark_theme
+    _text_theme = ft.TextTheme(
+        body_medium=ft.TextStyle(size=start_font),
+        body_large=ft.TextStyle(size=start_font + 2),
+        body_small=ft.TextStyle(size=start_font - 2),
+    )
+    page.theme      = ft.Theme(text_theme=_text_theme)
+    page.dark_theme = ft.Theme(text_theme=_text_theme)
+    page.update()
+
     def route_change(route):
         page.views.clear()
         page.views.append(main_menu(page))
@@ -119,99 +140,17 @@ def main(page: ft.Page):
 
         page.update()
 
-    def view_pop(view):
-        page.views.pop()
-        page.go(page.views[-1].route)
+    #def view_pop(view):
+    #    page.views.pop()
+    #    page.go(page.views[-1].route)
 
     page.on_route_change = route_change
+    #page.on_view_pop     = view_pop
     page.go(page.route)
 
 
 ft.app(main)
 
-
-//app/chat.py
-import flet as ft
-import path
-from .components.chat.chat_manager import get_chat_id, get_status_chat
-from .components.chat import chat_db as db
-from .components.chat import chat_connection as conn
-from .components.database import get_contact_id_by_chat, get_contact_display_name
-from .components.chat.chat_ui import ChatUI
-from .components.utils import format_phone
-
-
-def chat_view(page: ft.Page) -> ft.View:
-    db_path    = f"{path.db_path()}user_data.db"
-    chat_id    = get_chat_id()
-    status     = get_status_chat()
-    contact_id = get_contact_id_by_chat(db_path, chat_id)
-    my_id      = db.get_current_user_id()
-    contact    = db.get_contact_data(contact_id) if contact_id else None
-
-    if contact is None:
-        contact_name  = "Неизвестный"
-        contact_phone = "—"
-        contact_about = "—"
-    else:
-        contact_name  = get_contact_display_name(db_path, contact_id)
-        contact_phone = format_phone(str(contact[3]))
-        contact_about = contact[2]
-
-    contact_user = {
-        "id":           contact_id,
-        "name":         contact_name,
-        "avatar_color": ft.Colors.GREY,
-        "phone":        contact_phone,
-        "about":        contact_about,
-        "last_seen":    "None",
-    }
-    current_user = {
-        "id":           my_id,
-        "name":         "None",
-        "avatar_color": ft.Colors.GREY,
-        "phone":        "None",
-        "status":       "None",
-        "about":        "None",
-    }
-
-    conn.start_connection(my_id, contact_id, status)
-    ui = ChatUI(page, current_user, contact_user)
-
-    page.overlay.append(ui.file_picker)
-    page.update()
-
-    # Колбэки для входящих сообщений (используются извне при необходимости)
-    page.data = {
-        "add_incoming_text": lambda text, sid=None: ui.add_message_to_chat(
-            ui.create_text_message(text, is_user=(sid == my_id))),
-        "add_incoming_image": lambda path, name, sid=None, ot=False: ui.add_message_to_chat(
-            ui.create_image_message(path, name, is_user=(sid == my_id), one_time_view=ot)),
-        "add_incoming_video": lambda path, name, sid=None: ui.add_message_to_chat(
-            ui.create_video_message(path, name, is_user=(sid == my_id))),
-        "add_incoming_audio": lambda path, name, sid=None: ui.add_message_to_chat(
-            ui.create_audio_message(path, name, is_user=(sid == my_id))),
-        "add_incoming_document": lambda path, name, sid=None, ftype="Файл": ui.add_message_to_chat(
-            ui.create_document_message(path, name, ftype, is_user=(sid == my_id))),
-    }
-
-    ui.poll_queue()
-
-    return ft.View(
-        "/chat",
-        controls=[ft.Container(
-            expand=True,
-            content=ft.Column([
-                ui.chat_header,
-                ft.Container(content=ui.messages_column, expand=True,
-                             padding=10, bgcolor=ft.Colors.GREY_100),
-                ui.voice_panel,
-                ui.input_bar,
-            ], expand=True),
-        )],
-        padding=0,
-        bgcolor=ft.Colors.WHITE,
-    )
 
 
 //app/menu.py
@@ -463,179 +402,6 @@ def main_menu(page: ft.Page) -> ft.View:
     )
 
 
-
-//app/registration.py
-import flet as ft
-import httpx as hx
-import json as js
-import requests as rq
-
-
-def main_registartion(page: ft.Page):
-    page.title = "Регистрация"
-    page.vertical_alignment = ft.MainAxisAlignment.CENTER
-    page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
-
-    # Переменные для валидации
-    required_fields = []
-    error_text = ft.Text(color="red", visible=False)
-
-    def validate_fields():
-        # Проверяем все обязательные поля
-        for field in required_fields:
-            if not field.value:
-                field.error_text = "Это поле обязательно для заполнения"
-                field.update()
-                return False
-            
-        return True
-
-    def validate_password():
-        if text_input_password.value != text_input_password_clon.value:
-            text_input_password.error_text = "Пароли не совпадают"
-            text_input_password_clon.error_text = "Пароли не совпадают"
-            text_input_password.update()
-            text_input_password_clon.update()
-            return False
-        return True
-
-    async def rest_api(e):
-        # Сбрасываем ошибки
-        error_text.visible = False
-        error_text.update()
-        
-        for field in required_fields:
-            field.error_text = None
-            field.update()
-
-        # Валидация
-        if not validate_fields():
-            return
-            
-        if not validate_password():
-            return
-
-        #Удаляем первые 1-2 символа по условию
-        phone_number = text_input_number.value
-        if len(phone_number) == 11:
-            phone_number = phone_number[1:]  # удаляем первый символ
-        elif len(phone_number) == 12:
-            phone_number = phone_number[2:]  # удаляем первые два символа
-        # Подготовка данных
-        data = {
-            'login': text_input_login.value,
-            'email': text_input_email.value,
-            'number': phone_number,
-            'password': text_input_password.value
-        }
-
-        try:
-            # Отправка на сервер
-            async with hx.AsyncClient() as client:
-                response = await client.post(
-                    'http://127.0.0.1:5000/api/v2/user/registration/',
-                    json=data
-                )
-                
-            if response.status_code == 200:
-                    # Очистка полей после успешной отправки
-                    text_input_login.value = ""
-                    text_input_email.value = ""
-                    text_input_password.value = ""
-                    text_input_password_clon.value = ""
-                    page.go('/login')
-                    page.update()
-            else:
-                    error_text.value = f"Ошибка сервера: {response.text}"
-                    error_text.visible = True
-                    error_text.update()
-                    
-        except Exception as ex:
-            error_text.value = f"Ошибка соединения с сервером :("
-            print(f"Ошибка при отправке данных: {ex}")
-            error_text.visible = True
-            error_text.update()
-
-    # Элементы интерфейса
-    label = ft.Text('Регистрация:', size=30)
-    
-    text_input_login = ft.TextField(
-        label='Имя пользователя',
-        autofocus=True
-    )
-    
-    text_input_email = ft.TextField(
-        label='E-Mail'
-    )
-
-    text_input_number = ft.TextField(
-        label='Телефон')
-    
-    text_input_password = ft.TextField(
-        label='Пароль',
-        password=True,
-        can_reveal_password=True
-    )
-    
-    text_input_password_clon = ft.TextField(
-        label='Повторите пароль',
-        password=True,
-        can_reveal_password=True
-    )
-    
-    button = ft.ElevatedButton(
-        'Зарегистрироваться',
-        on_click=rest_api
-    )
-
-    or_sign_up = ft.Text('Есть аккаунт?')
-
-    button_sign_up = ft.ElevatedButton(
-        'Войти',
-        on_click= lambda _: page.go('/login')
-    )
-
-
-    # Добавляем поля в список обязательных
-    required_fields = [
-        text_input_login,
-        text_input_email,
-        text_input_number,
-        text_input_password,
-        text_input_password_clon
-    ]
-
-    # Собираем интерфейс
-    return ft.View(
-        "/registration",
-        [
-            ft.Container(
-                ft.Column(
-                    [
-                        ft.Container(label, margin=5),
-                        ft.Container(text_input_login, margin=5),
-                        ft.Container(text_input_email, margin=5),
-                        ft.Container(text_input_number, margin=5),
-                        ft.Container(text_input_password, margin=5),
-                        ft.Container(text_input_password_clon, margin=5),
-                        ft.Container(error_text, margin=5),
-                        ft.Container(button, margin=5, alignment=ft.alignment.center),
-                        ft.Container(or_sign_up, margin=5, alignment=ft.alignment.center),
-                        ft.Container(button_sign_up, margin=5, alignment=ft.alignment.center)
-                    ],
-                    alignment=ft.MainAxisAlignment.CENTER,
-                    width=400
-                ),
-                expand=True,
-                alignment=ft.alignment.center
-            )
-        ],
-        # appbar=appbar,
-        # navigation_bar=navigation_bar
-    )
-
-
-
 //app/settings.py
 import flet as ft
 import sqlite3 as sql
@@ -644,17 +410,16 @@ import path
 db_path = f"{path.db_path()}user_data.db"
 
 
-# ── БД: миграция и чтение/запись настроек ────────────────────────────────────
+# ── БД ───────────────────────────────────────────────────────────────────────
 
 def _migrate_settings():
-    """Добавляет колонки theme и font_size если их нет."""
+    """Добавляет font_size если нет (color_theme уже есть в main.py)."""
     with sql.connect(db_path) as con:
         cur = con.cursor()
-        for col, default in [("theme", "dark"), ("font_size", "14")]:
-            try:
-                cur.execute(f"ALTER TABLE user_settings ADD COLUMN {col} TEXT DEFAULT '{default}'")
-            except sql.OperationalError:
-                pass
+        try:
+            cur.execute("ALTER TABLE user_settings ADD COLUMN font_size TEXT DEFAULT '14'")
+        except sql.OperationalError:
+            pass
         con.commit()
 
 
@@ -663,13 +428,13 @@ def _load_settings() -> dict:
     with sql.connect(db_path) as con:
         cur = con.cursor()
         try:
-            cur.execute("SELECT theme, font_size FROM user_settings LIMIT 1")
+            cur.execute("SELECT color_theme, font_size FROM user_settings LIMIT 1")
             row = cur.fetchone()
             if row:
-                return {"theme": row[0] or "dark", "font_size": int(row[1] or 14)}
+                return {"color_theme": row[0] or "dark", "font_size": int(row[1] or 14)}
         except sql.OperationalError:
             pass
-    return {"theme": "dark", "font_size": 14}
+    return {"color_theme": "dark", "font_size": 14}
 
 
 def _save_setting(key: str, value: str):
@@ -693,7 +458,18 @@ def _load_user() -> dict:
     return {"name": "", "profile": "", "number": "", "avatar": ""}
 
 
-# ── Главный вид ───────────────────────────────────────────────────────────────
+def _apply_font(page: ft.Page, size: int):
+    """Обновляет размер шрифта в обеих темах страницы."""
+    t = ft.TextTheme(
+        body_medium=ft.TextStyle(size=size),
+        body_large=ft.TextStyle(size=size + 2),
+        body_small=ft.TextStyle(size=size - 2),
+    )
+    page.theme      = ft.Theme(text_theme=t)
+    page.dark_theme = ft.Theme(text_theme=t)
+
+
+# ── Вид ──────────────────────────────────────────────────────────────────────
 
 def settings_view(page: ft.Page) -> ft.View:
     settings = _load_settings()
@@ -707,7 +483,7 @@ def settings_view(page: ft.Page) -> ft.View:
     f_profile = ft.TextField(label="Профиль / статус", value=user["profile"], border_radius=10)
 
     def _save_profile(e):
-        # Поля заполнены — логика сохранения будет добавлена позже
+        # Логика сохранения будет добавлена позже
         edit_dlg.open = False
         page.update()
 
@@ -765,10 +541,6 @@ def settings_view(page: ft.Page) -> ft.View:
     )
     page.overlay.append(edit_dlg)
 
-    def _open_edit(e):
-        edit_dlg.open = True
-        page.update()
-
     # ── Шапка профиля ─────────────────────────────────────────────────────────
 
     profile_header = ft.Container(
@@ -794,7 +566,9 @@ def settings_view(page: ft.Page) -> ft.View:
                                     shape=ft.CircleBorder(),
                                     padding=ft.padding.all(4),
                                 ),
-                                on_click=_open_edit,
+                                on_click=lambda e: (
+                                    setattr(edit_dlg, "open", True), page.update()
+                                ),
                             ),
                             alignment=ft.alignment.bottom_right,
                             right=0, bottom=0,
@@ -818,7 +592,7 @@ def settings_view(page: ft.Page) -> ft.View:
 
     # ── Смена темы ────────────────────────────────────────────────────────────
 
-    is_dark = settings["theme"] == "dark"
+    is_dark = settings["color_theme"] == "dark"
 
     theme_label = ft.Text(
         "Тёмная тема" if is_dark else "Светлая тема",
@@ -829,9 +603,9 @@ def settings_view(page: ft.Page) -> ft.View:
         nonlocal is_dark
         is_dark = e.control.value
         new_theme = "dark" if is_dark else "light"
-        _save_setting("theme", new_theme)
+        _save_setting("color_theme", new_theme)
         theme_label.value = "Тёмная тема" if is_dark else "Светлая тема"
-        page.theme_mode = ft.ThemeMode.DARK if is_dark else ft.ThemeMode.LIGHT
+        page.theme_mode   = ft.ThemeMode.DARK if is_dark else ft.ThemeMode.LIGHT
         page.update()
 
     theme_row = ft.Container(
@@ -876,6 +650,8 @@ def settings_view(page: ft.Page) -> ft.View:
         _save_setting("font_size", str(val))
         font_preview.size   = val
         font_size_lbl.value = f"{val} px"
+        # Применяем ко всему приложению сразу
+        _apply_font(page, val)
         page.update()
 
     font_row = ft.Container(
@@ -950,157 +726,6 @@ def settings_view(page: ft.Page) -> ft.View:
         "/settings",
         appbar=appbar,
         controls=[content],
-    )
-
-
-
-//app/sign_up.py
-import flet as ft
-import httpx as hx
-import sqlite3 as ql
-import json as js
-import path
-
-db_path = f"{path.db_path()}user_data.db" 
-json_path = f"{path.db_path}config/config.jsonc"
-
-def main_sign_up(page: ft.Page):
-    page.title = "Авторизацыя"
-    #page.theme_mode = data["theme"]
-    page.vertical_alignment = ft.MainAxisAlignment.CENTER
-    page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
-
-    # Переменные для валидации
-    required_fields = []
-    error_text = ft.Text(color="red", visible=False)
-
-    def validate_fields():
-        # Проверяем все обязательные поля
-        for field in required_fields:
-            if not field.value:
-                field.error_text = "Это поле обязательно для заполнения"
-                field.update()
-                return False
-        return True
-
-    async def rest_api(e):
-        # Сбрасываем ошибки
-        error_text.visible = False
-        error_text.update()
-        
-        for field in required_fields:
-            field.error_text = None
-            field.update()
-
-        # Валидация
-        if not validate_fields():
-            return
-            
-        # Подготовка данных
-        data = {
-            'login': text_input_login.value,
-            'password': text_input_password.value
-        }
-
-        #try:
-            # Отправка на сервер
-        async with hx.AsyncClient() as client:
-                response = await client.post(
-                    'http://127.0.0.1:5000/api/v2/user/login/',
-                    json=data
-                )
-                
-        if response.status_code == 200:
-            json_response = response.json()
-            # Извлекаем данные из ответа
-            id_user = json_response["id_users"]
-            name = json_response["login"]
-            number = json_response["number"]
-            token = json_response["token"]
-            profil = json_response["profil"]
-            authorization = "true"
-            
-            with ql.connect(db_path) as con:
-                cur = con.cursor()
-                cur.execute("DELETE FROM user_settings")
-                cur.execute("DELETE FROM users_data")
-                cur.execute(
-                    "INSERT INTO users_data (id_user, name, profile, number, token) VALUES (?, ?, ?, ?, ?)",
-                    (id_user, name, profil, number, token)
-                )
-                cur.execute(
-                    "INSERT INTO user_settings (authorization) VALUES (?)",
-                    (authorization,)
-                )
-                # Очистка полей после успешной отправки
-                text_input_login.value = ""
-                text_input_password.value = ""
-                #Перенапровляем на главную страницу
-                page.go('/main')
-                page.update()
-            cur.close()
-
-        else:
-            error_text.value = f"Error:{response}"
-            error_text.visible = True
-            error_text.update()
-
-    # Элементы интерфейса
-    label = ft.Text('Авторизация:', size=30)
-    
-    text_input_login = ft.TextField(
-        label='Имя пользователя',
-        autofocus=True
-    )
-    
-    text_input_password = ft.TextField(
-        label='Пароль',
-        password=True,
-        can_reveal_password=True
-    )
-      
-    button = ft.ElevatedButton(
-        'Войти',
-        on_click=rest_api
-    )
-    
-    or_redistration = ft.Text('Нет аккаунта?')
-
-    button_registration = ft.ElevatedButton(
-        'Зарегистрироватся',
-        on_click= lambda _: page.go('/registration')
-    )
-
-    # Добавляем поля в список обязательных
-    required_fields = [
-        text_input_login,
-        text_input_password
-    ]
-
-    # Собираем интерфейс
-    return ft.View(
-    "/login",
-    [
-        ft.Container(
-            ft.Column(
-                [
-                    ft.Container(label, margin=5),
-                    ft.Container(text_input_login, margin=5),
-                    ft.Container(text_input_password, margin=5),
-                    ft.Container(error_text, margin=5),
-                    ft.Container(button, margin=5, alignment=ft.alignment.center),
-                    ft.Container(or_redistration, margin=5, alignment=ft.alignment.center),
-                    ft.Container(button_registration, margin=5, alignment=ft.alignment.center)
-                ],
-                alignment=ft.MainAxisAlignment.CENTER,
-                width=400
-            ),
-            expand=True,  # Растягиваем на весь доступный размер
-            alignment=ft.alignment.center  # Центрируем содержимое
-        )
-    ],
-    # appbar=appbar,  # раскомментируйте если нужно
-    # navigation_bar=navigation_bar  # раскомментируйте если нужно
     )
 
 
@@ -1337,7 +962,8 @@ def get_contact_id_by_chat(db_path: str, chat_id: int):
 
 
 
-//app/components/dialogs.py
+
+/app/components/dialogs.py
 import flet as ft
 
 
@@ -1444,6 +1070,7 @@ def create_contact_dialog():
 
     return (dialog, contact_list, search_field, loading_container,
             search_result_container, not_saved_col, saved_col, delete_btn_row)
+
 
 
 
@@ -2044,56 +1671,3 @@ def create_chat_item(chat: dict, on_click_handler, on_menu_handler=None,
         border_radius=10,
         ink=True,
     )
-
-
-
-//app/components/utils.py
-from datetime import datetime
-
-
-# Таблица транслитерации кириллицы
-_CYR_TO_LAT = {
-    'А': 'A', 'Б': 'B', 'В': 'V', 'Г': 'G', 'Д': 'D',
-    'Е': 'E', 'Ё': 'E', 'Ж': 'Z', 'З': 'Z', 'И': 'I',
-    'Й': 'I', 'К': 'K', 'Л': 'L', 'М': 'M', 'Н': 'N',
-    'О': 'O', 'П': 'P', 'Р': 'R', 'С': 'S', 'Т': 'T',
-    'У': 'U', 'Ф': 'F', 'Х': 'H', 'Ц': 'C', 'Ч': 'C',
-    'Ш': 'S', 'Щ': 'S', 'Ъ': '', 'Ы': 'Y', 'Ь': '',
-    'Э': 'E', 'Ю': 'U', 'Я': 'Y',
-}
-
-
-def format_phone(number: str) -> str:
-    """Форматирует номер телефона в вид +7 (XXX) XXX-XX-XX."""
-    if not number:
-        return ""
-    digits = ''.join(filter(str.isdigit, str(number)))
-    if len(digits) == 11:
-        digits = digits[1:]
-    if len(digits) == 10:
-        return f"+7 ({digits[0:3]}) {digits[3:6]}-{digits[6:8]}-{digits[8:10]}"
-    return str(number)
-
-
-def get_avatar_letter(name: str) -> str:
-    """Возвращает латинскую букву для аватара по первому символу имени."""
-    if not name:
-        return "U"
-    ch = name[0].upper()
-    return _CYR_TO_LAT.get(ch, ch if ch.isalpha() else 'U')
-
-
-def format_chat_time(time_string: str) -> str:
-    """Форматирует строку даты-времени в HH:MM."""
-    if not time_string:
-        return ""
-    try:
-        fmt = '%Y-%m-%d %H:%M:%S.%f' if '.' in time_string else '%Y-%m-%d %H:%M:%S'
-        return datetime.strptime(time_string, fmt).strftime('%H:%M')
-    except ValueError:
-        return ""
-
-
-все чики пуки мне понравилось но есть омент ты создала новая поле theme но нужно записывать и изминять значение в поле color_theme это первое 
-я тебе прикрипил весь мой проект и так вот он должен из бд получать зачение темы системы и по этаму значение изминять сваю тему да кароче ну ты понял
-затем наверное самое интересное это уже изминение шрифта сделай так чтобы мой проет читал тоже из бд размер шрифта и риально по таму значению каторые там он адаптировал свой шрифт нужного размера сделай это пжжжжжжжжж

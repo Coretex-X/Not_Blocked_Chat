@@ -5,17 +5,16 @@ import path
 db_path = f"{path.db_path()}user_data.db"
 
 
-# ── БД: миграция и чтение/запись настроек ────────────────────────────────────
+# ── БД ───────────────────────────────────────────────────────────────────────
 
 def _migrate_settings():
-    """Добавляет колонки theme и font_size если их нет."""
+    """Добавляет font_size если нет (color_theme уже есть в main.py)."""
     with sql.connect(db_path) as con:
         cur = con.cursor()
-        for col, default in [("theme", "dark"), ("font_size", "14")]:
-            try:
-                cur.execute(f"ALTER TABLE user_settings ADD COLUMN {col} TEXT DEFAULT '{default}'")
-            except sql.OperationalError:
-                pass
+        try:
+            cur.execute("ALTER TABLE user_settings ADD COLUMN font_size TEXT DEFAULT '14'")
+        except sql.OperationalError:
+            pass
         con.commit()
 
 
@@ -24,13 +23,13 @@ def _load_settings() -> dict:
     with sql.connect(db_path) as con:
         cur = con.cursor()
         try:
-            cur.execute("SELECT theme, font_size FROM user_settings LIMIT 1")
+            cur.execute("SELECT color_theme, font_size FROM user_settings LIMIT 1")
             row = cur.fetchone()
             if row:
-                return {"theme": row[0] or "dark", "font_size": int(row[1] or 14)}
+                return {"color_theme": row[0] or "dark", "font_size": int(row[1] or 14)}
         except sql.OperationalError:
             pass
-    return {"theme": "dark", "font_size": 14}
+    return {"color_theme": "dark", "font_size": 14}
 
 
 def _save_setting(key: str, value: str):
@@ -54,7 +53,18 @@ def _load_user() -> dict:
     return {"name": "", "profile": "", "number": "", "avatar": ""}
 
 
-# ── Главный вид ───────────────────────────────────────────────────────────────
+def _apply_font(page: ft.Page, size: int):
+    """Обновляет размер шрифта в обеих темах страницы."""
+    t = ft.TextTheme(
+        body_medium=ft.TextStyle(size=size),
+        body_large=ft.TextStyle(size=size + 2),
+        body_small=ft.TextStyle(size=size - 2),
+    )
+    page.theme      = ft.Theme(text_theme=t)
+    page.dark_theme = ft.Theme(text_theme=t)
+
+
+# ── Вид ──────────────────────────────────────────────────────────────────────
 
 def settings_view(page: ft.Page) -> ft.View:
     settings = _load_settings()
@@ -68,7 +78,7 @@ def settings_view(page: ft.Page) -> ft.View:
     f_profile = ft.TextField(label="Профиль / статус", value=user["profile"], border_radius=10)
 
     def _save_profile(e):
-        # Поля заполнены — логика сохранения будет добавлена позже
+        # Логика сохранения будет добавлена позже
         edit_dlg.open = False
         page.update()
 
@@ -126,10 +136,6 @@ def settings_view(page: ft.Page) -> ft.View:
     )
     page.overlay.append(edit_dlg)
 
-    def _open_edit(e):
-        edit_dlg.open = True
-        page.update()
-
     # ── Шапка профиля ─────────────────────────────────────────────────────────
 
     profile_header = ft.Container(
@@ -155,7 +161,9 @@ def settings_view(page: ft.Page) -> ft.View:
                                     shape=ft.CircleBorder(),
                                     padding=ft.padding.all(4),
                                 ),
-                                on_click=_open_edit,
+                                on_click=lambda e: (
+                                    setattr(edit_dlg, "open", True), page.update()
+                                ),
                             ),
                             alignment=ft.alignment.bottom_right,
                             right=0, bottom=0,
@@ -179,7 +187,7 @@ def settings_view(page: ft.Page) -> ft.View:
 
     # ── Смена темы ────────────────────────────────────────────────────────────
 
-    is_dark = settings["theme"] == "dark"
+    is_dark = settings["color_theme"] == "dark"
 
     theme_label = ft.Text(
         "Тёмная тема" if is_dark else "Светлая тема",
@@ -190,9 +198,9 @@ def settings_view(page: ft.Page) -> ft.View:
         nonlocal is_dark
         is_dark = e.control.value
         new_theme = "dark" if is_dark else "light"
-        _save_setting("theme", new_theme)
+        _save_setting("color_theme", new_theme)
         theme_label.value = "Тёмная тема" if is_dark else "Светлая тема"
-        page.theme_mode = ft.ThemeMode.DARK if is_dark else ft.ThemeMode.LIGHT
+        page.theme_mode   = ft.ThemeMode.DARK if is_dark else ft.ThemeMode.LIGHT
         page.update()
 
     theme_row = ft.Container(
@@ -237,6 +245,8 @@ def settings_view(page: ft.Page) -> ft.View:
         _save_setting("font_size", str(val))
         font_preview.size   = val
         font_size_lbl.value = f"{val} px"
+        # Применяем ко всему приложению сразу
+        _apply_font(page, val)
         page.update()
 
     font_row = ft.Container(

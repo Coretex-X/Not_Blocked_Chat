@@ -8,17 +8,52 @@ import os
 from redis.asyncio import Redis
 from redis.asyncio.connection import ConnectionPool
 import threading
+import requests
+
+import requests
+
+# 1. Проверяем, какие методы вообще доступны
+print("=== Тест 1: OPTIONS запрос ===")
+response = requests.options("http://127.0.0.1:5000/search/v2/user/update_user_data/")
+print(f"Status: {response.status_code}")
+print(f"Allow headers: {response.headers.get('Allow')}")
+print()
+
+# 2. Проверяем POST без всего
+print("=== Тест 2: POST без токенов ===")
+response = requests.post("http://127.0.0.1:5000/search/v2/user/update_user_data/")
+print(f"Status: {response.status_code}")
+print(f"Response: {response.text}")
+print()
+
+# 3. Проверяем POST с вашими данными
+print("=== Тест 3: POST с вашими данными ===")
+json_update = {
+    "id": 2,
+    "token": "ndfhjacebfacdlkppndpnlphimgmcclbpfmhoafphmkjahiadcadlolcipknhffkkAP&Rv1G_deCcmncS-m\L$B;q`'U@+fTc%G<",
+    "login": "User78",
+    "number": "9993999912",
+    "status": "NBC Hi"
+}
+
+response = requests.post(
+    "http://127.0.0.1:5000/search/v2/user/update_user_data/",
+    json=json_update
+)
+print(f"Status: {response.status_code}")
+print(f"Response: {response.text}")
 
 '''json_reqistartion = {
-    "login":"User5",
-    "email":"user5@mail.ru",
-    "number":"99999999999",
+    "login":"User3",
+    "email":"user3@mail.ru",
+    "number":"9999999992",
     "password":"12345678"
 }
 response = rq.post("http://127.0.0.1:5000/api/v2/user/registration/", json=json_reqistartion)
+print(response)
 
 response_json = response.json()
-id_user = response_json["id_users"]'''
+id_user = response_json["id_users"]
 
 
 json_login = {
@@ -28,7 +63,7 @@ json_login = {
 response_login = rq.post("http://127.0.0.1:5000/api/v2/user/login/", json=json_login)
 print(response_login)
 
-'''response_json = response_login.json()
+response_json = response_login.json()
 id_user = response_json["id_users"]
 
 sesion = {

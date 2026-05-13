@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     'chat.apps.ChatConfig',
     'user_search.apps.UserSearchConfig',
     'main.apps.MainConfig',
+    'notification.apps.NotificationConfig',
 ]
 
 MIDDLEWARE = [

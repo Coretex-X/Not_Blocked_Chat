@@ -23,5 +23,6 @@ urlpatterns = [
     path('api/v2/user/', include('sign_up.urls')),
     path('chat/v2/user/', include('chat.urls')),
     path('search/v2/user/', include('user_search.urls')),
+    path('notification/v2/user/', include('notification.urls')),
     path('', welcome_page),
 ]

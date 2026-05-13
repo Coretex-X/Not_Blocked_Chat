@@ -1,8 +1,7 @@
 import flet as ft
 import sqlite3 as sql
 import path
-import requests as http          # для HTTP-запросов
-
+import requests as http
 
 db_path = f"{path.db_path()}user_data.db"
 
@@ -13,7 +12,9 @@ PROFILE_UPDATE_URL =     "http://127.0.0.1:5000/search/v2/user/update_user_data/
 # Удаление аккаунта (POST, в теле id и token)
 ACCOUNT_DELETE_URL = "http://127.0.0.1:5000/search/v2/user/delete_user/"
 
+
 # ── БД ───────────────────────────────────────────────────────────────────────
+
 def _migrate_settings():
     """Добавляет font_size если нет."""
     with sql.connect(db_path) as con:
@@ -86,74 +87,84 @@ def settings_view(page: ft.Page) -> ft.View:
     user     = _load_user()
     is_dark  = settings["color_theme"] == "dark"
 
-    # ─── Вспомогательная функция для обновления всех цветов ─────────────────
+    # ─── Цвета для текущей темы ─────────────────────────────────────────────
+
+    def get_colors():
+        """Возвращает словарь с цветами для текущей темы."""
+        dark = is_dark
+        return {
+            "title": ft.Colors.ON_SURFACE,
+            "subtitle": ft.Colors.GREY_400 if dark else ft.Colors.GREY_700,
+            "label": ft.Colors.GREY_400 if dark else ft.Colors.GREY_700,
+        }
+
+    colors = get_colors()
+
+    # ─── Функция обновления всех цветов ─────────────────────────────────────
 
     def update_all_colors():
-        """Обновляет цвета всех текстовых элементов в зависимости от темы."""
-        nonlocal is_dark
+        """Обновляет цвета всех текстовых элементов при смене темы."""
+        c = get_colors()
         
-        # Цвета для текущей темы
-        title_color = ft.Colors.ON_SURFACE
-        subtitle_color = ft.Colors.GREY_400 if is_dark else ft.Colors.GREY_700
-        label_color = ft.Colors.GREY_400 if is_dark else ft.Colors.GREY_700
-        section_title_color = ft.Colors.ON_SURFACE
+        # Профиль
+        name_text.color = c["title"]
+        profile_text.color = c["subtitle"]
         
-        # Обновляем профиль
-        name_text.color = title_color
-        profile_text.color = subtitle_color
+        # Тема оформления
+        theme_title.color = c["title"]
+        theme_label.color = c["label"]
+        theme_icon.color = c["label"]
+        theme_icon.name = ft.Icons.DARK_MODE if is_dark else ft.Icons.LIGHT_MODE
         
-        # Обновляем тему оформления
-        theme_title.color = section_title_color
-        theme_label.color = label_color
-        theme_icon.color = label_color
+        # Размер шрифта
+        font_title.color = c["title"]
+        font_size_lbl.color = c["label"]
+        font_icon.color = c["label"]
+        font_preview.color = c["label"]
         
-        # Обновляем размер шрифта
-        font_title.color = section_title_color
-        font_size_lbl.color = label_color
-        font_icon.color = label_color
-        font_preview.color = label_color
-        
-        # Обновляем опасную зону
-        danger_title.color = ft.Colors.RED
+        # Опасная зона
         danger_icon.color = ft.Colors.RED
+        danger_title.color = ft.Colors.RED
         
-        # Обновляем TextField'ы если диалог открыт
-        if edit_dlg.open:
-            f_name.color = title_color
-            f_name.border_color = None
-            f_number.color = title_color
-            f_number.border_color = None
-            f_profile.color = title_color
-            f_profile.border_color = None
+        # TextField'ы в диалоге
+        f_name.color = c["title"]
+        f_name.label_style = ft.TextStyle(color=c["label"])
+        f_number.color = c["title"]
+        f_number.label_style = ft.TextStyle(color=c["label"])
+        f_profile.color = c["title"]
+        f_profile.label_style = ft.TextStyle(color=c["label"])
+        
+        # Заголовок диалога
+        edit_dlg.title.color = c["title"]
+        
+        # AppBar
+        appbar.title.color = c["title"]
         
         page.update()
 
-    # ── Диалог редактирования профиля ─────────────────────────────────────────
-
-    title_color = ft.Colors.ON_SURFACE
-    subtitle_color = ft.Colors.GREY_400 if is_dark else ft.Colors.GREY_700
+    # ── Диалог редактирования профиля ─────────────────────────────────────
 
     f_name    = ft.TextField(
         label="Имя",
         value=user["name"],
         border_radius=10,
-        color=title_color,
-        label_style=ft.TextStyle(color=subtitle_color),
+        color=colors["title"],
+        label_style=ft.TextStyle(color=colors["label"]),
     )
     f_number  = ft.TextField(
         label="Номер",
         value=user["number"],
         border_radius=10,
         keyboard_type=ft.KeyboardType.PHONE,
-        color=title_color,
-        label_style=ft.TextStyle(color=subtitle_color),
+        color=colors["title"],
+        label_style=ft.TextStyle(color=colors["label"]),
     )
     f_profile = ft.TextField(
         label="Профиль / статус",
         value=user["profile"],
         border_radius=10,
-        color=title_color,
-        label_style=ft.TextStyle(color=subtitle_color),
+        color=colors["title"],
+        label_style=ft.TextStyle(color=colors["label"]),
     )
 
     def _save_profile(e):
@@ -238,7 +249,7 @@ def settings_view(page: ft.Page) -> ft.View:
 
     edit_dlg = ft.AlertDialog(
         modal=True,
-        title=ft.Text("Редактировать профиль", color=title_color),
+        title=ft.Text("Редактировать профиль", color=colors["title"]),
         content=ft.Container(
             content=ft.Column(
                 [
@@ -290,19 +301,19 @@ def settings_view(page: ft.Page) -> ft.View:
     )
     page.overlay.append(edit_dlg)
 
-    # ── Шапка профиля ─────────────────────────────────────────────────────────
+    # ── Шапка профиля ─────────────────────────────────────────────────────
 
     name_text = ft.Text(
         user["name"] or "Пользователь",
         weight=ft.FontWeight.BOLD, size=22,
         text_align=ft.TextAlign.CENTER,
-        color=title_color,
+        color=colors["title"],
     )
     profile_text = ft.Text(
         user["profile"] or "",
         size=14,
         text_align=ft.TextAlign.CENTER,
-        color=subtitle_color,
+        color=colors["subtitle"],
     )
 
     def _open_edit_dialog(e):
@@ -350,16 +361,22 @@ def settings_view(page: ft.Page) -> ft.View:
         padding=ft.padding.symmetric(vertical=20),
     )
 
-    # ── Смена темы ────────────────────────────────────────────────────────────
+    # ── Смена темы ─────────────────────────────────────────────────────────
 
-    label_color = ft.Colors.GREY_400 if is_dark else ft.Colors.GREY_700
-
-    theme_icon = ft.Icon(ft.Icons.DARK_MODE, color=label_color)
-    theme_title = ft.Text("Тема оформления", size=16, weight=ft.FontWeight.W_500, color=title_color)
+    theme_icon = ft.Icon(
+        ft.Icons.DARK_MODE if is_dark else ft.Icons.LIGHT_MODE,
+        color=colors["label"],
+    )
+    theme_title = ft.Text(
+        "Тема оформления",
+        size=16,
+        weight=ft.FontWeight.W_500,
+        color=colors["title"],
+    )
     theme_label = ft.Text(
         "Тёмная тема" if is_dark else "Светлая тема",
         size=14,
-        color=label_color,
+        color=colors["label"],
     )
 
     def _toggle_theme(e):
@@ -368,8 +385,9 @@ def settings_view(page: ft.Page) -> ft.View:
         new_theme = "dark" if is_dark else "light"
         _save_setting("color_theme", new_theme)
         
-        # Обновляем тексты
+        # Обновляем тексты и иконку
         theme_label.value = "Тёмная тема" if is_dark else "Светлая тема"
+        theme_icon.name = ft.Icons.DARK_MODE if is_dark else ft.Icons.LIGHT_MODE
         
         # Обновляем тему страницы
         page.theme_mode = ft.ThemeMode.DARK if is_dark else ft.ThemeMode.LIGHT
@@ -403,16 +421,24 @@ def settings_view(page: ft.Page) -> ft.View:
         border_radius=12,
     )
 
-    # ── Размер шрифта ─────────────────────────────────────────────────────────
+    # ── Размер шрифта ─────────────────────────────────────────────────────
 
-    font_icon = ft.Icon(ft.Icons.TEXT_FIELDS, color=label_color)
-    font_title = ft.Text("Размер шрифта", size=16, weight=ft.FontWeight.W_500, color=title_color)
+    font_icon = ft.Icon(
+        ft.Icons.TEXT_FIELDS,
+        color=colors["label"],
+    )
+    font_title = ft.Text(
+        "Размер шрифта",
+        size=16,
+        weight=ft.FontWeight.W_500,
+        color=colors["title"],
+    )
     font_size_val = settings["font_size"]
-    font_size_lbl = ft.Text(f"{font_size_val} px", size=13, color=label_color)
+    font_size_lbl = ft.Text(f"{font_size_val} px", size=13, color=colors["label"])
     font_preview  = ft.Text(
         "Пример текста сообщения",
         size=font_size_val,
-        color=label_color,
+        color=colors["label"],
         text_align=ft.TextAlign.CENTER,
     )
 
@@ -459,18 +485,25 @@ def settings_view(page: ft.Page) -> ft.View:
         border_radius=12,
     )
 
-    # ── Удаление аккаунта ────────────────────────────────────────────────────
+    # ── Удаление аккаунта ─────────────────────────────────────────────────
 
     danger_icon = ft.Icon(ft.Icons.WARNING, color=ft.Colors.RED)
-    danger_title = ft.Text("Удалить аккаунт", size=16, weight=ft.FontWeight.W_500, color=ft.Colors.RED)
+    danger_title = ft.Text(
+        "Опасная зона",
+        size=16,
+        weight=ft.FontWeight.W_500,
+        color=ft.Colors.RED,
+    )
 
     def _delete_account(e):
         # Диалог подтверждения
         confirm_dlg = ft.AlertDialog(
             modal=True,
-            title=ft.Text("Удаление аккаунта", color=title_color),
-            content=ft.Text("Вы уверены, что хотите удалить свой аккаунт? "
-                            "Это действие необратимо.", color=title_color),
+            title=ft.Text("Удаление аккаунта", color=colors["title"]),
+            content=ft.Text(
+                "Вы уверены, что хотите удалить свой аккаунт? Это действие необратимо.",
+                color=colors["title"],
+            ),
             actions=[
                 ft.TextButton(
                     "Да",
@@ -531,12 +564,13 @@ def settings_view(page: ft.Page) -> ft.View:
             page.update()
 
     delete_btn = ft.OutlinedButton(
+        "Удалить аккаунт",
         icon=ft.Icons.DELETE_FOREVER,
         style=ft.ButtonStyle(color=ft.Colors.RED),
         on_click=_delete_account,
     )
 
-    # ── Сборка ────────────────────────────────────────────────────────────────
+    # ── Сборка ─────────────────────────────────────────────────────────────
 
     content = ft.Column(
         controls=[
@@ -578,7 +612,7 @@ def settings_view(page: ft.Page) -> ft.View:
     appbar = ft.AppBar(
         leading=ft.IconButton(ft.Icons.CHEVRON_LEFT, on_click=lambda _: page.go("/")),
         leading_width=40,
-        title=ft.Text("Настройки", color=title_color),
+        title=ft.Text("Настройки", color=colors["title"]),
         center_title=False,
         bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
     )

@@ -7,40 +7,40 @@ import time
 import base64
 import threading
 import queue
-
+ 
 from . import chat_connection as conn
 from .chat_connection import FILE_SEPARATOR
-
+ 
 # ── Константы ─────────────────────────────────────────────────────────────────
-
+ 
 INCOMING_FOLDER = "assets/data.media/incoming_files"
 ASSETS_FOLDER   = "assets/data.media/assets"
 VOICE_FOLDER    = "assets/data.media/voice_recordings"
 SETTINGS_FILE   = "chat_settings.json"
 MAX_FILE_SIZE   = 50 * 1024 * 1024  # 50 МБ
-
+ 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".webm"}
 AUDIO_EXTS = {".mp3", ".wav", ".ogg", ".m4a"}
-
+ 
 for _folder in (INCOMING_FOLDER, ASSETS_FOLDER, VOICE_FOLDER):
     os.makedirs(_folder, exist_ok=True)
-
-
+ 
+ 
 # ── Утилиты ───────────────────────────────────────────────────────────────────
-
+ 
 def _ext(filename: str) -> str:
     return os.path.splitext(filename)[1].lower()
-
-
+ 
+ 
 def _file_type(filename: str) -> str:
     e = _ext(filename)
     if e in IMAGE_EXTS: return "image"
     if e in VIDEO_EXTS: return "video"
     if e in AUDIO_EXTS: return "audio"
     return "document"
-
-
+ 
+ 
 def _file_size_str(path: str) -> str:
     try:
         size = os.path.getsize(path)
@@ -49,44 +49,44 @@ def _file_size_str(path: str) -> str:
         return f"{size / (1024 * 1024):.1f} МБ"
     except Exception:
         return "?"
-
-
+ 
+ 
 def _fmt_seconds(s: float) -> str:
     return f"{int(s // 60)}:{int(s % 60):02d}"
-
-
+ 
+ 
 def _now_hm() -> str:
     return datetime.datetime.now().strftime("%H:%M")
-
-
+ 
+ 
 # ── Класс ChatUI ──────────────────────────────────────────────────────────────
-
+ 
 class ChatUI:
     """Весь UI и логика экрана чата."""
-
+ 
     def __init__(self, page: ft.Page, current_user: dict, contact_user: dict):
         self.page         = page
         self.CURRENT_USER = current_user
         self.CONTACT_USER = contact_user
-
+ 
         self.messages_column  = ft.Column(scroll=ft.ScrollMode.ALWAYS, expand=True)
         self.all_messages:     list = []
         self.sent_media_files: list = []
         self.viewed_once_ids:  list = []
-
+ 
         self.reply_to         = [None]
         self.is_blocked       = [False]
         self.auto_save_folder = [None]
         self.recording_start  = [None]
-
+ 
         self._load_settings()
         self._build_reply_bar()
         self._build_voice_panel()
         self._build_input_bar()
         self._build_header()
-
+ 
     # ── Настройки ─────────────────────────────────────────────────────────────
-
+ 
     def _load_settings(self):
         try:
             if os.path.exists(SETTINGS_FILE):
@@ -94,16 +94,16 @@ class ChatUI:
                     self.auto_save_folder[0] = json.load(f).get("auto_download_folder")
         except Exception:
             pass
-
+ 
     def _save_settings(self):
         try:
             with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
                 json.dump({"auto_download_folder": self.auto_save_folder[0]}, f, ensure_ascii=False)
         except Exception:
             pass
-
+ 
     # ── Общие утилиты ─────────────────────────────────────────────────────────
-
+ 
     def make_avatar(self, user: dict, size: int = 40) -> ft.CircleAvatar:
         letter = (user.get("name") or "?")[0].upper()
         return ft.CircleAvatar(
@@ -111,22 +111,22 @@ class ChatUI:
             bgcolor=user.get("avatar_color", ft.Colors.GREY),
             radius=size // 2,
         )
-
+ 
     def show_snack(self, text: str):
         self.page.open(ft.SnackBar(content=ft.Text(text), duration=2000))
         self.page.update()
-
+ 
     def scroll_to_bottom(self):
         self.messages_column.scroll_to(offset=-1, duration=300)
-
+ 
     def add_message_to_chat(self, widget):
         self.messages_column.controls.append(widget)
         self.all_messages.append(widget)
         self.scroll_to_bottom()
         self.page.update()
-
+ 
     # ── Панель ответа ─────────────────────────────────────────────────────────
-
+ 
     def _build_reply_bar(self):
         self.reply_preview_text = ft.Text(
             "", size=12, color=ft.Colors.GREY_700,
@@ -149,12 +149,12 @@ class ChatUI:
             padding=ft.padding.symmetric(horizontal=12, vertical=6),
             border=ft.border.only(left=ft.border.BorderSide(3, ft.Colors.BLUE)),
         )
-
+ 
     def cancel_reply(self):
         self.reply_to[0] = None
         self.reply_bar.visible = False
         self.reply_bar.update()
-
+ 
     def set_reply(self, text: str):
         self.reply_to[0] = text
         self.reply_preview_text.value = text if len(text) <= 60 else text[:57] + "..."
@@ -162,12 +162,12 @@ class ChatUI:
         self.reply_bar.update()
         self.message_input.focus()
         self.message_input.update()
-
+ 
     def _apply_block_state(self):
         pass  # Поле ввода остаётся активным
-
+ 
     # ── Файловые операции ─────────────────────────────────────────────────────
-
+ 
     def auto_save_file(self, src: str, filename: str) -> str:
         folder = self.auto_save_folder[0]
         if not folder or not os.path.exists(folder):
@@ -183,7 +183,7 @@ class ChatUI:
         except Exception as e:
             print(f"❌ Автосохранение: {e}")
             return src
-
+ 
     def download_file(self, file_path: str, file_name: str):
         def on_save(e: ft.FilePickerResultEvent):
             if e.path:
@@ -192,26 +192,26 @@ class ChatUI:
                     self.show_snack(f"Файл сохранён: {e.path}")
                 except Exception as ex:
                     self.show_snack(f"Ошибка сохранения: {ex}")
-
+ 
         picker = ft.FilePicker(on_result=on_save)
         self.page.overlay.append(picker)
         self.page.update()
         picker.save_file(file_name=file_name, dialog_title="Сохранить файл как")
-
+ 
     def select_auto_save_folder(self, e):
         def on_picked(e: ft.FilePickerResultEvent):
             if e.path:
                 self.auto_save_folder[0] = e.path
                 self._save_settings()
                 self.show_snack(f"Папка для сохранения: {e.path}")
-
+ 
         picker = ft.FilePicker(on_result=on_picked)
         self.page.overlay.append(picker)
         self.page.update()
         picker.get_directory_path(dialog_title="Выберите папку для автосохранения")
-
+ 
     # ── Диалоги просмотра ─────────────────────────────────────────────────────
-
+ 
     def open_image_fullscreen(self, image_path: str, file_name: str):
         def close(e): self.page.close(dlg)
         dlg = ft.AlertDialog(
@@ -229,7 +229,7 @@ class ChatUI:
             ],
         )
         self.page.open(dlg)
-
+ 
     def open_video_viewer(self, video_path: str, file_name: str):
         def close(e): self.page.close(dlg)
         dlg = ft.AlertDialog(
@@ -248,31 +248,31 @@ class ChatUI:
             ],
         )
         self.page.open(dlg)
-
+ 
     # ── Контекстное меню сообщения ────────────────────────────────────────────
-
+ 
     def show_message_menu(self, msg_widget, text: str, is_user: bool,
                           msg_text_ref=None, edited_tag=None, current_text=None):
         def close(e): self.page.close(dlg)
-
+ 
         def copy(e):
             self.page.set_clipboard(text)
             self.show_snack("📋 Скопировано!")
             self.page.close(dlg)
-
+ 
         def reply(e):
             self.set_reply(text)
             self.page.close(dlg)
-
+ 
         def delete(e):
             self.delete_message(msg_widget, text)
             self.page.close(dlg)
-
+ 
         def edit(e):
             self.page.close(dlg)
             field = ft.TextField(value=current_text[0], multiline=True,
                                  min_lines=1, max_lines=5, expand=True, autofocus=True)
-
+ 
             def confirm_edit(e):
                 new_text = field.value.strip()
                 if not new_text or new_text == current_text[0]:
@@ -294,7 +294,7 @@ class ChatUI:
                     print(f"❌ Ошибка отправки правки: {ex}")
                 self.page.close(edit_dlg)
                 self.show_snack("✏️ Сообщение изменено")
-
+ 
             edit_dlg = ft.AlertDialog(
                 title=ft.Text("Редактировать сообщение"),
                 content=ft.Container(content=field, width=320),
@@ -305,20 +305,20 @@ class ChatUI:
                 ],
             )
             self.page.open(edit_dlg)
-
+ 
         items = [ft.TextButton("↩ Ответить", on_click=reply),
                  ft.TextButton("📋 Копировать", on_click=copy)]
         if is_user:
             items += [ft.TextButton("✏️ Редактировать", on_click=edit),
                       ft.TextButton("🗑️ Удалить", on_click=delete)]
-
+ 
         dlg = ft.AlertDialog(
             title=ft.Text("Действия"),
             content=ft.Column(items, tight=True),
             actions=[ft.TextButton("Закрыть", on_click=close)],
         )
         self.page.open(dlg)
-
+ 
     def delete_message(self, widget, text: str = ""):
         if widget not in self.messages_column.controls:
             return
@@ -337,32 +337,32 @@ class ChatUI:
             self.show_snack("✅ Сообщение удалено у всех")
         except Exception as e:
             print(f"❌ Ошибка удаления: {e}")
-
+ 
     # ── Стили пузырей ─────────────────────────────────────────────────────────
-
+ 
     def _bubble_color(self, is_user: bool):
         return ft.Colors.BLUE if is_user else ft.Colors.GREY
-
+ 
     def _bubble_color_dark(self, is_user: bool):
         return ft.Colors.BLUE_700 if is_user else ft.Colors.GREY_700
-
+ 
     def _bubble_margin(self, is_user: bool):
         return ft.margin.only(right=10) if is_user else ft.margin.only(left=10)
-
+ 
     def _make_row(self, bubble, is_user: bool, user_data: dict) -> ft.Row:
         avatar = self.make_avatar(user_data)
         spacer = ft.Container(expand=True)
         return (ft.Row([spacer, bubble, avatar], vertical_alignment=ft.CrossAxisAlignment.START)
                 if is_user else
                 ft.Row([avatar, bubble, spacer], vertical_alignment=ft.CrossAxisAlignment.START))
-
+ 
     # ── Создание пузырей ──────────────────────────────────────────────────────
-
+ 
     def create_text_message(self, text: str, is_user: bool = True,
                             quote: str | None = None) -> ft.GestureDetector:
         user_data     = self.CURRENT_USER if is_user else self.CONTACT_USER
         children      = []
-
+ 
         if quote:
             short = quote if len(quote) <= 60 else quote[:57] + "..."
             children.append(ft.Container(
@@ -377,17 +377,17 @@ class ChatUI:
                 border_radius=8,
                 border=ft.border.only(left=ft.border.BorderSide(3, ft.Colors.WHITE70)),
             ))
-
+ 
         msg_ref      = ft.Ref[ft.Text]()
         edited_tag   = ft.Text("", size=10, color=ft.Colors.WHITE54, italic=True)
         current_text = [text]
-
+ 
         children += [
             ft.Text(text, color=ft.Colors.WHITE, ref=msg_ref),
             ft.Row([edited_tag, ft.Container(expand=True),
                     ft.Text(_now_hm(), size=12, color=ft.Colors.WHITE54)], spacing=0),
         ]
-
+ 
         bubble = ft.Container(
             content=ft.Column(children, tight=True, spacing=4),
             bgcolor=self._bubble_color(is_user),
@@ -396,24 +396,24 @@ class ChatUI:
         )
         row    = self._make_row(bubble, is_user, user_data)
         widget = None
-
+ 
         def open_menu(e):
             self.show_message_menu(widget, current_text[0], is_user,
                                    msg_text_ref=msg_ref,
                                    edited_tag=edited_tag,
                                    current_text=current_text)
-
+ 
         widget = ft.GestureDetector(content=row, on_tap=open_menu,
                                     on_long_press_start=open_menu)
         return widget
-
+ 
     def create_image_message(self, image_path: str, file_name: str,
                              is_user: bool = True,
                              one_time_view: bool = False) -> ft.GestureDetector:
         user_data  = self.CURRENT_USER if is_user else self.CONTACT_USER
         message_id = f"img_{datetime.datetime.now().timestamp()}"
         is_viewed  = [message_id in self.viewed_once_ids]
-
+ 
         def viewed_placeholder():
             return ft.Column([
                 ft.Icon(ft.Icons.VISIBILITY_OFF, size=80, color=ft.Colors.WHITE54),
@@ -421,7 +421,7 @@ class ChatUI:
                         weight=ft.FontWeight.BOLD),
                 ft.Text(_now_hm(), size=12, color=ft.Colors.WHITE54),
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10)
-
+ 
         def on_tap(e):
             if one_time_view:
                 if is_viewed[0]:
@@ -429,12 +429,12 @@ class ChatUI:
                     return
                 self.viewed_once_ids.append(message_id)
                 is_viewed[0] = True
-
+ 
                 def close_and_replace(e):
                     self.page.close(dlg)
                     image_container.content = viewed_placeholder()
                     image_container.update()
-
+ 
                 dlg = ft.AlertDialog(
                     content=ft.Container(
                         content=ft.Column([
@@ -449,7 +449,7 @@ class ChatUI:
                 self.page.open(dlg)
             else:
                 self.open_image_fullscreen(image_path, file_name)
-
+ 
         if one_time_view and is_viewed[0]:
             bubble_content = viewed_placeholder()
         else:
@@ -457,7 +457,7 @@ class ChatUI:
                 content=ft.Icon(ft.Icons.VISIBILITY, color=ft.Colors.WHITE, size=30),
                 alignment=ft.alignment.center, width=200, height=200,
             ) if one_time_view else ft.Container())
-
+ 
             bubble_content = ft.Column([
                 ft.Stack([
                     ft.Image(src=image_path, width=200, height=200,
@@ -477,7 +477,7 @@ class ChatUI:
                 ], spacing=5),
                 ft.Text(_now_hm(), size=12, color=ft.Colors.WHITE54),
             ], tight=True, spacing=5)
-
+ 
         image_container = ft.Container(
             content=bubble_content,
             bgcolor=self._bubble_color_dark(is_user),
@@ -490,7 +490,7 @@ class ChatUI:
             on_long_press_start=lambda e: self.show_message_menu(widget, "📷 Фото", is_user),
         )
         return widget
-
+ 
     def create_video_message(self, video_path: str, file_name: str,
                              is_user: bool = True) -> ft.GestureDetector:
         user_data = self.CURRENT_USER if is_user else self.CONTACT_USER
@@ -525,24 +525,24 @@ class ChatUI:
             on_long_press_start=lambda e: self.show_message_menu(widget, "Видео", is_user),
         )
         return widget
-
+ 
     def create_audio_message(self, audio_path: str, file_name: str,
                              is_user: bool = True,
                              one_time_view: bool = False):
         user_data = self.CURRENT_USER if is_user else self.CONTACT_USER
         abs_path  = os.path.abspath(audio_path)
-
+ 
         if not os.path.exists(abs_path):
             return self.create_document_message(abs_path, f"❌ {file_name}",
                                                 "Файл не найден", is_user)
-
+ 
         size_text = _file_size_str(abs_path)
         try:
             fsize    = os.path.getsize(abs_path)
             duration = [max(30, min(600, int(fsize / (1024 * 1024) * 60)))]
         except Exception:
             duration = [180]
-
+ 
         is_playing       = [False]
         current_pos      = [0.0]
         timer_ref        = [None]
@@ -550,16 +550,16 @@ class ChatUI:
         play_btn         = [None]
         slider_ref       = [None]
         time_text        = [None]
-
+ 
         audio = ft.Audio(src=abs_path, autoplay=False, volume=1)
         audio_elem[0] = audio
         self.page.overlay.append(audio)
-
+ 
         def on_slider_change(e):
             current_pos[0] = e.control.value
             time_text[0].value = f"{_fmt_seconds(current_pos[0])} / {_fmt_seconds(duration[0])}"
             time_text[0].update()
-
+ 
         def on_slider_release(e):
             current_pos[0] = e.control.value
             try:
@@ -567,7 +567,7 @@ class ChatUI:
             except Exception as ex:
                 print(f"❌ Ошибка перемотки: {ex}")
             on_slider_change(e)
-
+ 
         def tick():
             if not is_playing[0]:
                 return
@@ -584,7 +584,7 @@ class ChatUI:
                 return
             timer_ref[0] = threading.Timer(0.5, tick)
             timer_ref[0].start()
-
+ 
         def toggle_play(e):
             try:
                 if is_playing[0]:
@@ -606,26 +606,26 @@ class ChatUI:
                 play_btn[0].update()
             except Exception as ex:
                 print(f"❌ Ошибка воспроизведения: {ex}")
-
+ 
         btn = ft.IconButton(icon=ft.Icons.PLAY_ARROW, icon_color=ft.Colors.WHITE,
                             icon_size=30, tooltip="Воспроизвести", on_click=toggle_play)
         play_btn[0] = btn
-
+ 
         sld = ft.Slider(min=0, max=duration[0], value=0, divisions=100,
                         active_color=ft.Colors.WHITE, inactive_color=ft.Colors.WHITE38,
                         thumb_color=ft.Colors.WHITE,
                         on_change=on_slider_change, on_change_end=on_slider_release)
         slider_ref[0] = sld
-
+ 
         tm = ft.Text(f"0:00 / {_fmt_seconds(duration[0])}",
                      color=ft.Colors.WHITE70, size=11, weight=ft.FontWeight.BOLD)
         time_text[0] = tm
-
+ 
         download_btn = (ft.IconButton(icon=ft.Icons.DOWNLOAD, icon_color=ft.Colors.WHITE,
                                       icon_size=20, tooltip="Скачать",
                                       on_click=lambda e: self.download_file(abs_path, file_name))
                         if not one_time_view else ft.Container())
-
+ 
         bubble = ft.Container(
             content=ft.Column([
                 ft.Row([
@@ -654,7 +654,7 @@ class ChatUI:
                 widget, f"🎵 Аудио: {file_name}", is_user),
         )
         return widget
-
+ 
     def create_document_message(self, file_path: str, file_name: str,
                                 file_type: str,
                                 is_user: bool = True) -> ft.GestureDetector:
@@ -663,7 +663,7 @@ class ChatUI:
         clean_name = file_name
         for prefix in ("📄 ", "📝 ", "📊 ", "📃 ", "🗜️ ", "📎 "):
             clean_name = clean_name.replace(prefix, "")
-
+ 
         bubble = ft.Container(
             content=ft.Column([
                 ft.Row([
@@ -690,9 +690,9 @@ class ChatUI:
             on_long_press_start=lambda e: self.show_message_menu(widget, file_name, is_user),
         )
         return widget
-
+ 
     # ── Отправка ──────────────────────────────────────────────────────────────
-
+ 
     def send_text_message(self, e):
         text = self.message_input.value.strip()
         if not text:
@@ -710,7 +710,7 @@ class ChatUI:
         self.message_input.value = ""
         self.message_input.update()
         self.reset_input_buttons()
-
+ 
     def send_file_via_ws(self, file_path: str, file_name: str,
                          file_type: str, one_time_view: bool = False) -> bool:
         try:
@@ -727,40 +727,40 @@ class ChatUI:
         except Exception as e:
             print(f"❌ Ошибка отправки файла: {e}")
             return False
-
+ 
     # ── Файловый диалог ───────────────────────────────────────────────────────
-
+ 
     def on_file_picked(self, e: ft.FilePickerResultEvent):
         if e.files:
             for f in e.files:
                 self.show_rename_dialog({"path": f.path, "name": f.name,
                                          "display_name": f.name})
-
+ 
     def show_rename_dialog(self, file_info: dict):
         name_no_ext, ext = os.path.splitext(file_info["name"])
         is_media         = ext.lower() in IMAGE_EXTS | VIDEO_EXTS | AUDIO_EXTS
         rename_field = ft.TextField(value=name_no_ext, label="Название",
                                     expand=True, text_size=13)
         one_time_cb  = ft.Checkbox(label="Одноразовый", value=False)
-
+ 
         def confirm(e):
             new_name = rename_field.value.strip() + ext
             file_info["display_name"]  = new_name or file_info["name"]
             file_info["one_time_view"] = one_time_cb.value if is_media else False
             self.page.close(dlg)
             self.add_file_to_chat(file_info)
-
+ 
         def skip(e):
             file_info["display_name"]  = file_info["name"]
             file_info["one_time_view"] = one_time_cb.value if is_media else False
             self.page.close(dlg)
             self.add_file_to_chat(file_info)
-
+ 
         short = file_info["name"][:35] + ("..." if len(file_info["name"]) > 35 else "")
         items = [ft.Text(short, size=11, weight=ft.FontWeight.BOLD), rename_field]
         if is_media:
             items.append(one_time_cb)
-
+ 
         dlg = ft.AlertDialog(
             title=ft.Text("Отправка файла", size=15),
             content=ft.Container(content=ft.Column(items, tight=True, spacing=10), width=280),
@@ -770,16 +770,16 @@ class ChatUI:
             ],
         )
         self.page.open(dlg)
-
+ 
     def add_file_to_chat(self, file_info: dict):
         p           = file_info["path"]
         name        = file_info["display_name"]
         one_time    = file_info.get("one_time_view", False)
         ftype       = _file_type(name)
         saved_path  = self.auto_save_file(p, name)
-
+ 
         self.send_file_via_ws(saved_path, name, ftype, one_time)
-
+ 
         e = _ext(name)
         if e in IMAGE_EXTS:
             widget = self.create_image_message(saved_path, name, is_user=True,
@@ -792,15 +792,15 @@ class ChatUI:
         else:
             widget = self.create_document_message(saved_path, f"📎 {name}",
                                                   "Файл", is_user=True)
-
+ 
         self.messages_column.controls.append(widget)
         self.all_messages.append(widget)
         self.sent_media_files.append({"name": name, "type": e, "path": saved_path})
         self.scroll_to_bottom()
         self.page.update()
-
+ 
     # ── Входящие сообщения ────────────────────────────────────────────────────
-
+ 
     def handle_incoming_file(self, msg: dict):
         try:
             file_name = msg["file_name"]
@@ -812,7 +812,7 @@ class ChatUI:
             with open(save_path, "wb") as f:
                 f.write(file_bytes)
             shutil.copy2(save_path, os.path.join(ASSETS_FOLDER, os.path.basename(save_path)))
-
+ 
             e = _ext(file_name)
             if e in IMAGE_EXTS:
                 widget = self.create_image_message(save_path, file_name, is_user=False)
@@ -826,7 +826,7 @@ class ChatUI:
             self.add_message_to_chat(widget)
         except Exception as e:
             print(f"❌ Ошибка получения файла: {e}")
-
+ 
     def poll_queue(self):
         """Опрашивает очередь входящих сообщений каждые 0.5 с."""
         try:
@@ -846,19 +846,19 @@ class ChatUI:
         except queue.Empty:
             pass
         threading.Timer(0.5, self.poll_queue).start()
-
+ 
     # ── Голосовые сообщения ───────────────────────────────────────────────────
-
+ 
     def _build_voice_panel(self):
         self.recording_label   = ft.Text("Запись... 0:00", size=14)
         self.voice_one_time_cb = ft.Checkbox(label="Одноразовый", value=False)
-
+ 
         def cancel_voice(e):
             self.voice_panel.visible     = False
             self.recording_start[0]      = None
             self.voice_one_time_cb.value = False
             self.voice_panel.update()
-
+ 
         def send_voice(e):
             ts        = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             file_name = f"voice_{ts}.mp3"
@@ -874,7 +874,7 @@ class ChatUI:
             self.recording_start[0]      = None
             self.voice_one_time_cb.value = False
             self.voice_panel.update()
-
+ 
         self.voice_panel = ft.Container(
             visible=False,
             content=ft.Column([
@@ -894,7 +894,7 @@ class ChatUI:
             shadow=ft.BoxShadow(spread_radius=1, blur_radius=15,
                                 color=ft.Colors.BLACK54, offset=ft.Offset(0, 0)),
         )
-
+ 
     def _send_voice_message(self, audio_path: str, file_name: str, one_time: bool = False):
         saved = self.auto_save_file(audio_path, file_name)
         self.add_message_to_chat(
@@ -902,33 +902,33 @@ class ChatUI:
                                       is_user=True, one_time_view=one_time))
         if self.auto_save_folder[0] and saved != audio_path:
             self.show_snack("✅ Голосовое сообщение сохранено")
-
+ 
     def _start_recording_timer(self):
         self.recording_start[0] = time.time()
         self._tick_recording()
-
+ 
     def _tick_recording(self):
         if self.recording_start[0] and self.voice_panel.visible:
             elapsed = int(time.time() - self.recording_start[0])
             self.recording_label.value = f"Запись... {elapsed // 60}:{elapsed % 60:02d}"
             self.recording_label.update()
             threading.Timer(1.0, self._tick_recording).start()
-
+ 
     def toggle_voice(self, e):
         self.voice_panel.visible = not self.voice_panel.visible
         if self.voice_panel.visible:
             self._start_recording_timer()
         self.voice_panel.update()
-
+ 
     # ── Кнопки ввода ──────────────────────────────────────────────────────────
-
+ 
     def reset_input_buttons(self):
         self.mic_btn.visible    = True
         self.attach_btn.visible = True
         self.send_btn.visible   = False
         for b in (self.mic_btn, self.attach_btn, self.send_btn):
             b.update()
-
+ 
     def on_text_change(self, e):
         has_text            = bool(self.message_input.value.strip())
         self.mic_btn.visible    = not has_text
@@ -936,7 +936,7 @@ class ChatUI:
         self.send_btn.visible   = has_text
         for b in (self.mic_btn, self.attach_btn, self.send_btn):
             b.update()
-
+ 
     def _build_input_bar(self):
         self.message_input = ft.TextField(
             hint_text="Введите сообщение...",
@@ -964,53 +964,67 @@ class ChatUI:
                        vertical_alignment=ft.CrossAxisAlignment.END),
             ], spacing=0),
             padding=10,
-            bgcolor=ft.Colors.WHITE,
+            bgcolor=ft.Colors.SURFACE,
         )
-
+ 
     # ── Шапка чата ────────────────────────────────────────────────────────────
-
+ 
     def _build_header(self):
         self.chat_header = ft.Container(
             content=ft.Row([
                 ft.IconButton(icon=ft.Icons.ARROW_BACK,
                               on_click=lambda e: self.page.go('/'),
                               icon_color=ft.Colors.BLUE),
-                ft.GestureDetector(
-                    content=ft.Row([
-                        self.make_avatar(self.CONTACT_USER),
-                        ft.Column([
-                            ft.Text(self.CONTACT_USER["name"],
-                                    weight=ft.FontWeight.BOLD, size=16),
-                            ft.Text(self.CONTACT_USER["last_seen"],
-                                    size=12, color=ft.Colors.GREY),
-                        ], spacing=0),
-                    ], alignment=ft.MainAxisAlignment.START),
-                    on_tap=self.show_user_profile,
-                ),
+                ft.Row([
+                    self.make_avatar(self.CONTACT_USER),
+                    ft.Column([
+                        ft.Text(self.CONTACT_USER["name"],
+                                weight=ft.FontWeight.BOLD, size=16),
+                        ft.Text(self.CONTACT_USER["last_seen"],
+                                size=12, color=ft.Colors.GREY),
+                    ], spacing=0),
+                ], alignment=ft.MainAxisAlignment.START),
                 ft.Container(expand=True),
-                ft.IconButton(icon=ft.Icons.DELETE_SWEEP, icon_color=ft.Colors.RED,
-                              tooltip="Очистить весь чат",
-                              on_click=lambda e: self.clear_all_chat()),
+                ft.PopupMenuButton(
+                    icon=ft.Icons.MORE_VERT,
+                    items=[
+                        ft.PopupMenuItem(
+                            text="Редактировать чат",
+                            icon=ft.Icons.EDIT,
+                            on_click=lambda e: self.edit_chat(),
+                        ),
+                        ft.PopupMenuItem(
+                            text="Удалить чат",
+                            icon=ft.Icons.DELETE,
+                            on_click=lambda e: self.clear_all_chat(),
+                        ),
+                        ft.PopupMenuItem(
+                            text="Заблокировать пользователя",
+                            icon=ft.Icons.BLOCK,
+                            on_click=lambda e: self._toggle_block_from_menu(),
+                        ),
+                    ],
+                ),
             ], alignment=ft.MainAxisAlignment.START),
-            padding=15, bgcolor=ft.Colors.WHITE,
+            padding=15, bgcolor=ft.Colors.SURFACE,
             border=ft.border.only(bottom=ft.border.BorderSide(1, ft.Colors.GREY_300)),
         )
-
+ 
     # ── Профиль контакта ──────────────────────────────────────────────────────
-
+ 
     def _info_row(self, icon, title, value):
         return ft.Row([
             ft.Icon(icon, size=20, color=ft.Colors.GREY),
             ft.Column([ft.Text(title, size=12, color=ft.Colors.GREY),
                        ft.Text(value, size=14)], spacing=2),
         ], spacing=10)
-
+ 
     def show_user_profile(self, e):
         def close(e): self.page.close(dlg)
         big_avatar     = self.make_avatar(self.CONTACT_USER, size=160)
         block_icon_ref = ft.Ref[ft.Icon]()
         block_text_ref = ft.Ref[ft.Text]()
-
+ 
         def _update_block_btn():
             blocked = self.is_blocked[0]
             block_icon_ref.current.name  = ft.Icons.LOCK_OPEN if blocked else ft.Icons.BLOCK
@@ -1019,14 +1033,14 @@ class ChatUI:
             block_text_ref.current.color = ft.Colors.ORANGE   if blocked else ft.Colors.RED
             block_icon_ref.current.update()
             block_text_ref.current.update()
-
+ 
         def toggle_block(e):
             self.is_blocked[0] = not self.is_blocked[0]
             _update_block_btn()
             self._apply_block_state()
             self.show_snack("🚫 Пользователь заблокирован"
                             if self.is_blocked[0] else "✅ Пользователь разблокирован")
-
+ 
         blocked = self.is_blocked[0]
         block_btn = ft.TextButton(
             content=ft.Row([
@@ -1039,7 +1053,7 @@ class ChatUI:
             ], spacing=10),
             on_click=toggle_block,
         )
-
+ 
         dlg = ft.AlertDialog(
             content=ft.Container(
                 content=ft.Column([
@@ -1079,9 +1093,45 @@ class ChatUI:
             actions=[ft.TextButton("Закрыть", on_click=close)],
         )
         self.page.open(dlg)
-
+ 
+    # ── Методы меню (три точки) ───────────────────────────────────────────────
+ 
+    def edit_chat(self):
+        field = ft.TextField(
+            value=self.CONTACT_USER["name"],
+            label="Название чата",
+            expand=True,
+            autofocus=True,
+        )
+ 
+        def confirm(e):
+            new_name = field.value.strip()
+            if new_name:
+                self.CONTACT_USER["name"] = new_name
+                self.page.close(dlg)
+                self.show_snack("✏️ Название чата изменено")
+ 
+        dlg = ft.AlertDialog(
+            title=ft.Text("Редактировать чат"),
+            content=ft.Container(content=field, width=320),
+            actions=[
+                ft.TextButton("Отмена",    on_click=lambda e: self.page.close(dlg)),
+                ft.TextButton("Сохранить", on_click=confirm,
+                              style=ft.ButtonStyle(color=ft.Colors.BLUE)),
+            ],
+        )
+        self.page.open(dlg)
+ 
+    def _toggle_block_from_menu(self):
+        self.is_blocked[0] = not self.is_blocked[0]
+        self._apply_block_state()
+        self.show_snack(
+            "🚫 Пользователь заблокирован"
+            if self.is_blocked[0] else "✅ Пользователь разблокирован"
+        )
+ 
     # ── Очистка чата ──────────────────────────────────────────────────────────
-
+ 
     def clear_all_chat(self):
         def confirm(e):
             self.messages_column.controls.clear()
@@ -1099,7 +1149,7 @@ class ChatUI:
                         except Exception as ex:
                             print(f"❌ Ошибка удаления {fp}: {ex}")
             self.show_snack("🗑️ Чат очищен")
-
+ 
         dlg = ft.AlertDialog(
             title=ft.Text("Очистить чат?"),
             content=ft.Text("Все сообщения будут удалены"),
@@ -1110,3 +1160,5 @@ class ChatUI:
             ],
         )
         self.page.open(dlg)
+ 
+ 

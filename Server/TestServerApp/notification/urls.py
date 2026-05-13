@@ -1,5 +1,5 @@
 from django.urls import path
 
 urlpatterns = [
-    path(),
+    path('', lambda request: None, name='notification'),
 ]

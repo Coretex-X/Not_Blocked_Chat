@@ -296,7 +296,7 @@ def get_status_chat():
     return _status_chat
 
 
-//app/components/chat/chat.py
+//app/components/chat/chat_ui.py
 import flet as ft
 import datetime
 import os
@@ -695,7 +695,14 @@ class ChatUI:
         )
         row    = self._make_row(bubble, is_user, user_data)
         widget = None
- 
+ python3 main.py
+Traceback (most recent call last):
+  File "/home/username/Test/Test_Chat/ChatTest/Client/src/main.py", line 8, in <module>
+    from app.chat import chat_view
+  File "/home/username/Test/Test_Chat/ChatTest/Client/src/app/chat.py", line 5, in <module>
+    from .components.chat.chat_id import get_current_user_id, get_contact_data  # <-- правильный импорт
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ModuleNotFoundError: No module named 'app.components.chat.chat_id'
         def open_menu(e):
             self.show_message_menu(widget, current_text[0], is_user,
                                    msg_text_ref=msg_ref,

@@ -10,93 +10,25 @@ from redis.asyncio.connection import ConnectionPool
 import threading
 import requests
 
-import requests
-
-# 1. Проверяем, какие методы вообще доступны
-print("=== Тест 1: OPTIONS запрос ===")
-response = requests.options("http://127.0.0.1:5000/search/v2/user/update_user_data/")
-print(f"Status: {response.status_code}")
-print(f"Allow headers: {response.headers.get('Allow')}")
-print()
-
-# 2. Проверяем POST без всего
-print("=== Тест 2: POST без токенов ===")
-response = requests.post("http://127.0.0.1:5000/search/v2/user/update_user_data/")
-print(f"Status: {response.status_code}")
-print(f"Response: {response.text}")
-print()
-
-# 3. Проверяем POST с вашими данными
-print("=== Тест 3: POST с вашими данными ===")
-json_update = {
-    "id": 2,
-    "token": "ndfhjacebfacdlkppndpnlphimgmcclbpfmhoafphmkjahiadcadlolcipknhffkkAP&Rv1G_deCcmncS-m\L$B;q`'U@+fTc%G<",
-    "login": "User78",
-    "number": "9993999912",
-    "status": "NBC Hi"
-}
-
-response = requests.post(
-    "http://127.0.0.1:5000/search/v2/user/update_user_data/",
-    json=json_update
-)
-print(f"Status: {response.status_code}")
-print(f"Response: {response.text}")
-
-'''json_reqistartion = {
-    "login":"User3",
-    "email":"user3@mail.ru",
-    "number":"9999999992",
-    "password":"12345678"
-}
-response = rq.post("http://127.0.0.1:5000/api/v2/user/registration/", json=json_reqistartion)
-print(response)
-
-response_json = response.json()
-id_user = response_json["id_users"]
-
-
-json_login = {
-    "login":"Магомедрасул",
-    "password":"12345678"
-}
-response_login = rq.post("http://127.0.0.1:5000/api/v2/user/login/", json=json_login)
-print(response_login)
-
-response_json = response_login.json()
-id_user = response_json["id_users"]
-
-sesion = {
-    "id_users": id_user,
-    "action": "offline"       
-}
-response_sesion = rq.post("http://127.0.0.1:5000/api/v2/user/sesion/", json=sesion)
-
-print(response_login)
-
 # 1. Аутентификация
 ws_auth = websocket.WebSocket()
 ws_auth.connect("ws://127.0.0.1:5000/ws/data/")
 ws_auth.send(json.dumps({
-    "room": "lobbi_1",
-    "user_id": 3,
-    "guest_id": 4,
-    "status_chat": "new_chat",
+    "room": "lobbi",
+    "user_id": 1,
+    "guest_id": 2,
+    "status_chat": "existing_chat",
     "token": "api87"
 }))#existing_chat
 
 
 # Создаем очередь для сообщений
 message_queue = queue.Queue()
-
-# Получаем ответ
-response = ws_auth.recv()
-print(f"Auth response: {response}")
 ws_auth.close()
 
 # 2. Подключаемся к чату
 ws = websocket.WebSocket()
-ws.connect("ws://127.0.0.1:5000/ws/new_chat_user/api87/")
+ws.connect("ws://127.0.0.1:5000/ws/chat_user/api87/")
 
 def receive_messages():
     while True:
@@ -123,7 +55,7 @@ while True:
     message = input()
     ws.send(json.dumps({"message": message}))
 
-ws.close()
+'''ws.close()
 
 
 
@@ -162,11 +94,99 @@ while True:
     ws.send(json.dumps({"message": message}))
     # НЕ вызываем ws.recv() здесь - это делает отдельный поток
 
-ws.close()'''
+ws.close()
 
 
 
-'''import json
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# 1. Проверяем, какие методы вообще доступны
+print("=== Тест 1: OPTIONS запрос ===")
+response = requests.options("http://127.0.0.1:5000/search/v2/user/update_user_data/")
+print(f"Status: {response.status_code}")
+print(f"Allow headers: {response.headers.get('Allow')}")
+print()
+
+# 2. Проверяем POST без всего
+print("=== Тест 2: POST без токенов ===")
+response = requests.post("http://127.0.0.1:5000/search/v2/user/update_user_data/")
+print(f"Status: {response.status_code}")
+print(f"Response: {response.text}")
+print()
+
+# 3. Проверяем POST с вашими данными
+print("=== Тест 3: POST с вашими данными ===")
+json_update = {
+    "id": 2,
+    "token": "ndfhjacebfacdlkppndpnlphimgmcclbpfmhoafphmkjahiadcadlolcipknhffkkAP&Rv1G_deCcmncS-m\L$B;q`'U@+fTc%G<",
+    "login": "User78",
+    "number": "9993999912",
+    "status": "NBC Hi"
+}
+
+response = requests.post(
+    "http://127.0.0.1:5000/search/v2/user/update_user_data/",
+    json=json_update
+)
+print(f"Status: {response.status_code}")
+print(f"Response: {response.text}")
+
+json_reqistartion = {
+    "login":"User2",
+    "email":"user2@mail.ru",
+    "number":"9999999992",
+    "password":"12345678"
+}
+response = rq.post("http://127.0.0.1:5000/api/v2/user/registration/", json=json_reqistartion)
+print(response)
+
+response_json = response.json()
+id_user = response_json["id_users"]
+
+
+json_login = {
+    "login":"Магомедрасул",
+    "password":"12345678"
+}
+response_login = rq.post("http://127.0.0.1:5000/api/v2/user/login/", json=json_login)
+print(response_login)
+
+response_json = response_login.json()
+id_user = response_json["id_users"]
+
+sesion = {
+    "id_users": id_user,
+    "action": "offline"       
+}
+response_sesion = rq.post("http://127.0.0.1:5000/api/v2/user/sesion/", json=sesion)
+
+print(response_login)
+
+
+
+
+import json
 
 # ИМПОРТИРУЕМ СИНХРОННЫЙ REDIS, а не асинхронный!
 from redis import Redis  # ← ВАЖНО: без .asyncio

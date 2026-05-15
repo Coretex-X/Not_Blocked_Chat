@@ -104,3 +104,10 @@ class GroupMessage(models.Model):
     
     def __str__(self):
         return f"{self.sender_id} in {self.group_id}: {self.message_text[:50] if self.message_text else '[media]'}"
+    
+
+class UserOff(models.Model):
+    user_id = models.TextField()
+    guest_id = models.TextField()
+    room = models.TextField()
+    message = models.TextField()

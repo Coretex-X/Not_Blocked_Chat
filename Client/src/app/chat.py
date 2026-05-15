@@ -17,13 +17,16 @@ def chat_view(page: ft.Page) -> ft.View:
     contact    = db.get_contact_data(contact_id) if contact_id else None
  
     if contact is None:
-        contact_name  = "Неизвестный"
-        contact_phone = "—"
-        contact_about = "—"
+        contact_name   = "Неизвестный"
+        contact_phone  = "—"
+        contact_about  = "—"
+        contact_status = "not_save_user"
     else:
-        contact_name  = get_contact_display_name(db_path, contact_id)
-        contact_phone = format_phone(str(contact[3]))
-        contact_about = contact[2]
+        contact_name   = get_contact_display_name(db_path, contact_id)
+        contact_phone  = format_phone(str(contact[3]))
+        contact_about  = contact[2]
+        # Поле status_user_contact — индекс 5 в таблице contacts
+        contact_status = contact[5] if len(contact) > 5 else "not_save_user"
  
     contact_user = {
         "id":           contact_id,
@@ -32,6 +35,7 @@ def chat_view(page: ft.Page) -> ft.View:
         "phone":        contact_phone,
         "about":        contact_about,
         "last_seen":    "None",
+        "status_user_contact": contact_status,   # добавлено
     }
     current_user = {
         "id":           my_id,
@@ -48,7 +52,7 @@ def chat_view(page: ft.Page) -> ft.View:
     page.overlay.append(ui.file_picker)
     page.update()
  
-    # Колбэки для входящих сообщений (используются извне при необходимости)
+    # Колбэки для входящих сообщений
     page.data = {
         "add_incoming_text": lambda text, sid=None: ui.add_message_to_chat(
             ui.create_text_message(text, is_user=(sid == my_id))),

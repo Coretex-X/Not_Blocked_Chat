@@ -220,12 +220,12 @@ def main():
         room="lobbi_3",
         user_id=3,
         guest_id=4,
-        status_chat="new_chat",
+        status_chat="existing_chat",
         token="api87"
     )
     
     # 2. Подключаемся к чату
-    client.connect_to_chat("/ws/new_chat_user/api87/")
+    client.connect_to_chat("/ws/chat_user/api87/")
     
     # 3. Запускаем прослушивание сообщений
     client.start_listening()

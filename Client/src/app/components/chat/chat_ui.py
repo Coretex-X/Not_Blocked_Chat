@@ -7,10 +7,12 @@ import time
 import base64
 import threading
 import queue
- 
+import path   # добавлено для работы с путями БД
+
 from . import chat_connection as conn
 from .chat_connection import FILE_SEPARATOR
- 
+from .. import database   # добавлено для сохранения контакта
+
 # ── Константы ─────────────────────────────────────────────────────────────────
  
 INCOMING_FOLDER = "assets/data.media/incoming_files"
@@ -79,11 +81,21 @@ class ChatUI:
         self.auto_save_folder = [None]
         self.recording_start  = [None]
  
+        # Добавлено для определения сохранённого контакта
+        self.contact_is_saved = (contact_user.get("status_user_contact") == "save_user")
+        self.menu_button = None      # будет хранить PopupMenuButton
+        self.block_menu_item = None  # пункт блокировки в меню
+ 
         self._load_settings()
         self._build_reply_bar()
         self._build_voice_panel()
         self._build_input_bar()
         self._build_header()
+ 
+        # Подписка на смену темы
+        self.page.on_theme_change = self._on_theme_change
+        self._update_input_theme()
+        self._update_popup_menu_icon_color()
  
     # ── Настройки ─────────────────────────────────────────────────────────────
  
@@ -967,9 +979,54 @@ class ChatUI:
             bgcolor=ft.Colors.SURFACE,
         )
  
-    # ── Шапка чата ────────────────────────────────────────────────────────────
+    # ── Шапка чата (динамическое меню) ────────────────────────────────────────
  
     def _build_header(self):
+        # Пункт "Очистить чат" (красный)
+        clear_item = ft.PopupMenuItem(
+            content=ft.Row([
+                ft.Icon(ft.Icons.DELETE, color=ft.Colors.RED),
+                ft.Text("Очистить чат", color=ft.Colors.RED),
+            ]),
+            on_click=lambda e: self.clear_all_chat(),
+        )
+
+        # Пункт редактирования или сохранения контакта
+        if self.contact_is_saved:
+            edit_item = ft.PopupMenuItem(
+                content=ft.Row([
+                    ft.Icon(ft.Icons.EDIT, color=ft.Colors.BLUE),
+                    ft.Text("Редактировать чат"),
+                ]),
+                on_click=lambda e: self.edit_chat(),
+            )
+        else:
+            edit_item = ft.PopupMenuItem(
+                content=ft.Row([
+                    ft.Icon(ft.Icons.PERSON_ADD, color=ft.Colors.BLUE),
+                    ft.Text("Сохранить контакт"),
+                ]),
+                on_click=lambda e: self.save_contact(),
+            )
+
+        # Пункт блокировки (обновляется динамически)
+        self.block_menu_item = ft.PopupMenuItem(
+            content=ft.Row([
+                ft.Icon(ft.Icons.BLOCK if not self.is_blocked[0] else ft.Icons.LOCK_OPEN,
+                        color=ft.Colors.RED if not self.is_blocked[0] else ft.Colors.GREEN),
+                ft.Text("Заблокировать" if not self.is_blocked[0] else "Разблокировать",
+                        color=ft.Colors.RED if not self.is_blocked[0] else ft.Colors.GREEN),
+            ]),
+            on_click=lambda e: self._toggle_block_from_menu(),
+        )
+
+        # Кнопка меню с динамическим цветом
+        self.menu_button = ft.PopupMenuButton(
+            icon=ft.Icons.MORE_VERT,
+            items=[edit_item, clear_item, self.block_menu_item],
+            icon_color=ft.Colors.BLACK if self.page.theme_mode == ft.ThemeMode.LIGHT else ft.Colors.GREY_400,
+        )
+
         self.chat_header = ft.Container(
             content=ft.Row([
                 ft.IconButton(icon=ft.Icons.ARROW_BACK,
@@ -985,32 +1042,32 @@ class ChatUI:
                     ], spacing=0),
                 ], alignment=ft.MainAxisAlignment.START),
                 ft.Container(expand=True),
-                ft.PopupMenuButton(
-                    icon=ft.Icons.MORE_VERT,
-                    items=[
-                        ft.PopupMenuItem(
-                            text="Редактировать чат",
-                            icon=ft.Icons.EDIT,
-                            on_click=lambda e: self.edit_chat(),
-                        ),
-                        ft.PopupMenuItem(
-                            text="Удалить чат",
-                            icon=ft.Icons.DELETE,
-                            on_click=lambda e: self.clear_all_chat(),
-                        ),
-                        ft.PopupMenuItem(
-                            text="Заблокировать пользователя",
-                            icon=ft.Icons.BLOCK,
-                            on_click=lambda e: self._toggle_block_from_menu(),
-                        ),
-                    ],
-                ),
+                self.menu_button,
             ], alignment=ft.MainAxisAlignment.START),
             padding=15, bgcolor=ft.Colors.SURFACE,
             border=ft.border.only(bottom=ft.border.BorderSide(1, ft.Colors.GREY_300)),
         )
+
+    def _update_block_menu_item(self):
+        """Обновляет текст, иконку и цвет пункта блокировки."""
+        if self.block_menu_item:
+            new_content = ft.Row([
+                ft.Icon(ft.Icons.LOCK_OPEN if self.is_blocked[0] else ft.Icons.BLOCK,
+                        color=ft.Colors.GREEN if self.is_blocked[0] else ft.Colors.RED),
+                ft.Text("Разблокировать" if self.is_blocked[0] else "Заблокировать",
+                        color=ft.Colors.GREEN if self.is_blocked[0] else ft.Colors.RED),
+            ])
+            self.block_menu_item.content = new_content
+            if self.menu_button:
+                self.menu_button.update()
  
-    # ── Профиль контакта ──────────────────────────────────────────────────────
+    def refresh_header(self):
+        """Обновляет заголовок чата (после смены имени контакта)."""
+        self._build_header()
+        # Обновляем контейнер в UI (он уже привязан к page)
+        self.page.update()
+ 
+    # ── Профиль контакта (убран None) ─────────────────────────────────────────
  
     def _info_row(self, icon, title, value):
         return ft.Row([
@@ -1038,6 +1095,7 @@ class ChatUI:
             self.is_blocked[0] = not self.is_blocked[0]
             _update_block_btn()
             self._apply_block_state()
+            self._update_block_menu_item()   # обновить пункт меню
             self.show_snack("🚫 Пользователь заблокирован"
                             if self.is_blocked[0] else "✅ Пользователь разблокирован")
  
@@ -1054,6 +1112,14 @@ class ChatUI:
             on_click=toggle_block,
         )
  
+        # Убираем None в полях
+        about_text = self.CONTACT_USER.get("about", "")
+        if about_text in (None, "None", ""):
+            about_text = "Нет информации"
+        phone_text = self.CONTACT_USER.get("phone", "")
+        if phone_text in (None, "None", ""):
+            phone_text = "—"
+ 
         dlg = ft.AlertDialog(
             content=ft.Container(
                 content=ft.Column([
@@ -1061,13 +1127,12 @@ class ChatUI:
                                  alignment=ft.alignment.center, padding=20),
                     ft.Text(self.CONTACT_USER["name"], size=24,
                             weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
-                    ft.Text(self.CONTACT_USER["phone"], size=16,
+                    ft.Text(phone_text, size=16,
                             color=ft.Colors.GREY, text_align=ft.TextAlign.CENTER),
                     ft.Container(alignment=ft.alignment.center, padding=10),
                     ft.Divider(),
                     ft.Container(content=ft.Column([
-                        self._info_row(ft.Icons.INFO_OUTLINE, "О себе",
-                                       self.CONTACT_USER["about"]),
+                        self._info_row(ft.Icons.INFO_OUTLINE, "О себе", about_text),
                         ft.Divider(height=20),
                         self._info_row(ft.Icons.PHOTO_LIBRARY, "Отправленные файлы",
                                        f"{len(self.sent_media_files)} файлов"),
@@ -1096,7 +1161,37 @@ class ChatUI:
  
     # ── Методы меню (три точки) ───────────────────────────────────────────────
  
+    def save_contact(self):
+        """Сохраняет несохранённый контакт."""
+        def on_save(e):
+            new_name = name_field.value.strip()
+            if not new_name:
+                self.show_snack("Имя не может быть пустым")
+                return
+            db_path = f"{path.db_path()}user_data.db"
+            if database.save_contact_name(db_path, self.CONTACT_USER["id"], new_name):
+                self.CONTACT_USER["name"] = new_name
+                self.contact_is_saved = True
+                self.refresh_header()
+                self.show_snack(f"Контакт сохранён как {new_name}")
+            else:
+                self.show_snack("Ошибка сохранения контакта")
+            self.page.close(dlg)
+ 
+        name_field = ft.TextField(label="Имя контакта", autofocus=True)
+        dlg = ft.AlertDialog(
+            title=ft.Text("Сохранить контакт"),
+            content=ft.Container(content=name_field, width=300),
+            actions=[
+                ft.TextButton("Отмена", on_click=lambda e: self.page.close(dlg)),
+                ft.TextButton("Сохранить", on_click=on_save,
+                              style=ft.ButtonStyle(color=ft.Colors.BLUE)),
+            ],
+        )
+        self.page.open(dlg)
+ 
     def edit_chat(self):
+        """Редактирует имя сохранённого контакта."""
         field = ft.TextField(
             value=self.CONTACT_USER["name"],
             label="Название чата",
@@ -1106,10 +1201,15 @@ class ChatUI:
  
         def confirm(e):
             new_name = field.value.strip()
-            if new_name:
-                self.CONTACT_USER["name"] = new_name
-                self.page.close(dlg)
-                self.show_snack("✏️ Название чата изменено")
+            if new_name and new_name != self.CONTACT_USER["name"]:
+                db_path = f"{path.db_path()}user_data.db"
+                if database.save_contact_name(db_path, self.CONTACT_USER["id"], new_name):
+                    self.CONTACT_USER["name"] = new_name
+                    self.refresh_header()
+                    self.show_snack("✏️ Название чата изменено")
+                else:
+                    self.show_snack("Ошибка изменения имени")
+            self.page.close(dlg)
  
         dlg = ft.AlertDialog(
             title=ft.Text("Редактировать чат"),
@@ -1125,12 +1225,13 @@ class ChatUI:
     def _toggle_block_from_menu(self):
         self.is_blocked[0] = not self.is_blocked[0]
         self._apply_block_state()
+        self._update_block_menu_item()
         self.show_snack(
             "🚫 Пользователь заблокирован"
             if self.is_blocked[0] else "✅ Пользователь разблокирован"
         )
  
-    # ── Очистка чата ──────────────────────────────────────────────────────────
+    # ── Очистка чата (уже есть, оставляем) ────────────────────────────────────
  
     def clear_all_chat(self):
         def confirm(e):
@@ -1161,4 +1262,23 @@ class ChatUI:
         )
         self.page.open(dlg)
  
+    # ── Обработка смены темы ──────────────────────────────────────────────────
+ 
+    def _on_theme_change(self, e):
+        self._update_input_theme()
+        self._update_popup_menu_icon_color()
+ 
+    def _update_input_theme(self):
+        if self.page.theme_mode == ft.ThemeMode.DARK:
+            self.message_input.bgcolor = ft.Colors.GREY_800
+            self.message_input.hint_style = ft.TextStyle(color=ft.Colors.GREY_400)
+        else:
+            self.message_input.bgcolor = ft.Colors.GREY_100
+            self.message_input.hint_style = ft.TextStyle(color=ft.Colors.GREY_600)
+        self.message_input.update()
+ 
+    def _update_popup_menu_icon_color(self):
+        if self.menu_button:
+            self.menu_button.icon_color = ft.Colors.BLACK if self.page.theme_mode == ft.ThemeMode.LIGHT else ft.Colors.GREY_400
+            self.menu_button.update()
  

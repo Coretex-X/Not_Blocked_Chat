@@ -383,16 +383,17 @@ def settings_view(page: ft.Page) -> ft.View:
         nonlocal is_dark
         is_dark = e.control.value
         new_theme = "dark" if is_dark else "light"
-        _save_setting("color_theme", new_theme)
         
-        # Обновляем тексты и иконку
+        # ЭТО СОХРАНЯЕТ В БД
+        with sql.connect(db_path) as con:
+            cur = con.cursor()
+            cur.execute("UPDATE user_settings SET color_theme = ?", (new_theme,))
+            con.commit()
+        
+        # Обновляем интерфейс
         theme_label.value = "Тёмная тема" if is_dark else "Светлая тема"
         theme_icon.name = ft.Icons.DARK_MODE if is_dark else ft.Icons.LIGHT_MODE
-        
-        # Обновляем тему страницы
         page.theme_mode = ft.ThemeMode.DARK if is_dark else ft.ThemeMode.LIGHT
-        
-        # Обновляем все цвета
         update_all_colors()
 
     theme_row = ft.Container(
@@ -444,10 +445,16 @@ def settings_view(page: ft.Page) -> ft.View:
 
     def _change_font(e):
         val = int(e.control.value)
-        _save_setting("font_size", str(val))
-        font_preview.size   = val
+        
+        # ЭТО СОХРАНЯЕТ В БД
+        with sql.connect(db_path) as con:
+            cur = con.cursor()
+            cur.execute("UPDATE user_settings SET font_size = ?", (str(val),))
+            con.commit()
+        
+        # Обновляем интерфейс
+        font_preview.size = val
         font_size_lbl.value = f"{val} px"
-        _apply_font(page, val)
         page.update()
 
     font_row = ft.Container(

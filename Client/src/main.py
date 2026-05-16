@@ -45,20 +45,15 @@ with ql.connect(db_path) as con:
     start_font    = int(row[2]) if row and row[2] else 14
 
 
+with ql.connect(db_path) as con:
+    cur = con.cursor()
+    cur.execute("SELECT color_theme FROM user_settings LIMIT 1")
+    row = cur.fetchone()
+    color_theme = row[0] if row else "dark"
+
 def main(page: ft.Page):
-    # Применяем тему из БД
-    page.theme_mode = ft.ThemeMode.DARK if start_theme == 'dark' else ft.ThemeMode.LIGHT
-
-    # Применяем размер шрифта из БД через page.theme / page.dark_theme
-    _text_theme = ft.TextTheme(
-        body_medium=ft.TextStyle(size=start_font),
-        body_large=ft.TextStyle(size=start_font + 2),
-        body_small=ft.TextStyle(size=start_font - 2),
-    )
-    page.theme      = ft.Theme(text_theme=_text_theme)
-    page.dark_theme = ft.Theme(text_theme=_text_theme)
-    page.update()
-
+    page.theme_mode = color_theme
+    
     def route_change(route):
         page.views.clear()
         page.views.append(main_menu(page))

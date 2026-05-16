@@ -496,7 +496,7 @@ def settings_view(page: ft.Page) -> ft.View:
 
     danger_icon = ft.Icon(ft.Icons.WARNING, color=ft.Colors.RED)
     danger_title = ft.Text(
-        "Опасная зона",
+        "Удалить аккаунт",
         size=16,
         weight=ft.FontWeight.W_500,
         color=ft.Colors.RED,
@@ -571,7 +571,6 @@ def settings_view(page: ft.Page) -> ft.View:
             page.update()
 
     delete_btn = ft.OutlinedButton(
-        "Удалить аккаунт",
         icon=ft.Icons.DELETE_FOREVER,
         style=ft.ButtonStyle(color=ft.Colors.RED),
         on_click=_delete_account,

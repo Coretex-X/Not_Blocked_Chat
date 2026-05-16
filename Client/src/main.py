@@ -24,8 +24,9 @@ with ql.connect(db_path) as con:
     cur.execute("""
         CREATE TABLE IF NOT EXISTS user_settings(
             authorization TEXT DEFAULT 'false',
-            color_theme TEXT DEFAULT 'dark',
-            language TEXT DEFAULT 'ru'
+            color_theme TEXT DEFAULT 'light',
+            language TEXT DEFAULT 'ru',
+            font_size TEXT DEFAULT '17'
         )
     """)
     # Миграция: добавляем font_size если нет

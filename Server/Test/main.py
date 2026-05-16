@@ -10,6 +10,25 @@ from redis.asyncio.connection import ConnectionPool
 import threading
 import requests
 
+
+
+import requests as rq
+import json
+
+sesion = {
+    "id_users": 2,
+    "token": "ojmdhfjilmanmnibdjodgoomdbohddodclokaedbomjdnceohkiecafgeejogihg%w=L&Qe$_z%y52T&C4ev?eCo]6$W-]URE_K#"
+}
+
+response = rq.post("http://127.0.0.1:5000/notification/v2/user/notification/", json=sesion)
+
+try:
+    data = response.json()
+    print("JSON response:", json.dumps(data, indent=2, ensure_ascii=False))
+except:
+    print("Response is not JSON")
+
+'''
 # 1. Аутентификация
 ws_auth = websocket.WebSocket()
 ws_auth.connect("ws://127.0.0.1:5000/ws/data/")
@@ -55,7 +74,9 @@ while True:
     message = input()
     ws.send(json.dumps({"message": message}))
 
-'''ws.close()
+
+
+ws.close()
 
 
 

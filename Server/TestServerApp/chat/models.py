@@ -107,7 +107,9 @@ class GroupMessage(models.Model):
     
 
 class UserOff(models.Model):
+    message_recipient_ID = models.TextField()
     user_id = models.TextField()
     guest_id = models.TextField()
     room = models.TextField()
     message = models.TextField()
+    status_chat = models.TextField()

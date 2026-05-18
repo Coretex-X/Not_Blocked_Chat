@@ -47,7 +47,8 @@ class UserNotification(APIView):
             messages_list.append({
                 "id_senders": msg.user_id,
                 "room": msg.room,
-                "message": msg.message
+                "message": msg.message,
+                "status_chat": msg.status_chat
             })
         
         # Удаляем все найденные записи из БД
@@ -57,3 +58,20 @@ class UserNotification(APIView):
         
         # Возвращаем найденные сообщения
         return Response(messages_list, status=status.HTTP_200_OK)
+    
+
+
+class UserStatusAPI(APIView):
+    def post(self, request):
+        online = 'online'
+        offline = 'offline'
+        action = request.data.get('action')
+        id_users = request.data.get('id_users')
+        
+        if action == online:
+            Models.objects.filter(pk=id_users).update(status=action)
+            return Response({"status": status.HTTP_200_OK})
+        
+        elif action == offline:
+            Models.objects.filter(pk=id_users).update(status=action)
+            return Response({"status": status.HTTP_404_NOT_FOUND})

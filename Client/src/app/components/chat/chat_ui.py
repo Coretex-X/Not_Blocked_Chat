@@ -11,6 +11,7 @@ import sqlite3 as sql
 
 from . import chat_connection as conn
 from .chat_connection import FILE_SEPARATOR
+from . import chat_db as db_ops
 import path
 
 # ── Константы ─────────────────────────────────────────────────────────────────
@@ -62,7 +63,6 @@ def _now_hm() -> str:
 
 
 def _get_contact_status(contact_id) -> str:
-    """Возвращает status_user_contact для контакта из БД."""
     try:
         db_path = f"{path.db_path()}user_data.db"
         with sql.connect(db_path) as con:
@@ -78,7 +78,6 @@ def _get_contact_status(contact_id) -> str:
 
 
 def _save_contact_name_db(contact_id, name: str):
-    """Сохраняет имя контакта и ставит статус save_user."""
     try:
         db_path = f"{path.db_path()}user_data.db"
         with sql.connect(db_path) as con:
@@ -102,10 +101,12 @@ def _save_contact_name_db(contact_id, name: str):
 class ChatUI:
     """Весь UI и логика экрана чата."""
 
-    def __init__(self, page: ft.Page, current_user: dict, contact_user: dict):
+    def __init__(self, page: ft.Page, current_user: dict, contact_user: dict,
+                 chat_id: int = None):
         self.page         = page
         self.CURRENT_USER = current_user
         self.CONTACT_USER = contact_user
+        self.chat_id      = chat_id  # ID текущего чата для сохранения истории
 
         self.messages_column  = ft.Column(scroll=ft.ScrollMode.ALWAYS, expand=True)
         self.all_messages:     list = []
@@ -117,16 +118,24 @@ class ChatUI:
         self.auto_save_folder = [None]
         self.recording_start  = [None]
 
-        # Ссылки на элементы меню для динамического обновления
         self._menu_first_item_ref  = ft.Ref[ft.PopupMenuItem]()
         self._menu_block_item_ref  = ft.Ref[ft.PopupMenuItem]()
         self._popup_btn_ref        = ft.Ref[ft.PopupMenuButton]()
+
+        # Инициализируем таблицу сообщений (на случай если её ещё нет)
+        try:
+            db_ops.init_messages_table()
+        except Exception as ex:
+            print(f"❌ init_messages_table: {ex}")
 
         self._load_settings()
         self._build_reply_bar()
         self._build_voice_panel()
         self._build_input_bar()
         self._build_header()
+
+        # Загружаем историю сообщений из БД
+        self._load_history()
 
     # ── Настройки ─────────────────────────────────────────────────────────────
 
@@ -144,6 +153,104 @@ class ChatUI:
                 json.dump({"auto_download_folder": self.auto_save_folder[0]}, f, ensure_ascii=False)
         except Exception:
             pass
+
+    # ── История сообщений ─────────────────────────────────────────────────────
+
+    def _load_history(self):
+        """Загружает все сообщения чата из БД и отображает их."""
+        if not self.chat_id:
+            return
+        try:
+            messages = db_ops.load_messages(self.chat_id)
+            for m in messages:
+                widget = self._restore_message_widget(m)
+                if widget:
+                    self.messages_column.controls.append(widget)
+                    self.all_messages.append(widget)
+        except Exception as ex:
+            print(f"❌ Ошибка загрузки истории: {ex}")
+
+    def _restore_message_widget(self, m: dict):
+        """Восстанавливает виджет сообщения из сохранённых данных."""
+        mt       = m["msg_type"]
+        is_user  = m["is_user"]
+        one_time = m["one_time"]
+
+        try:
+            if mt == "text":
+                return self.create_text_message(
+                    m["content"] or "", is_user=is_user, quote=m.get("quote_text"),
+                    saved_time=m["timestamp"]
+                )
+            elif mt == "image":
+                fp = m["file_path"] or ""
+                if not os.path.exists(fp):
+                    return self.create_document_message(
+                        fp, f"❌ {m['file_name'] or 'Фото'}", "Файл не найден", is_user
+                    )
+                return self.create_image_message(
+                    fp, m["file_name"] or "photo", is_user=is_user,
+                    one_time_view=one_time, saved_time=m["timestamp"]
+                )
+            elif mt == "video":
+                fp = m["file_path"] or ""
+                if not os.path.exists(fp):
+                    return self.create_document_message(
+                        fp, f"❌ {m['file_name'] or 'Видео'}", "Файл не найден", is_user
+                    )
+                return self.create_video_message(
+                    fp, m["file_name"] or "video", is_user=is_user,
+                    saved_time=m["timestamp"]
+                )
+            elif mt == "audio":
+                fp = m["file_path"] or ""
+                return self.create_audio_message(
+                    fp, m["file_name"] or "audio", is_user=is_user,
+                    one_time_view=one_time, saved_time=m["timestamp"]
+                )
+            elif mt == "document":
+                fp = m["file_path"] or ""
+                return self.create_document_message(
+                    fp, m["file_name"] or "Файл", "Файл", is_user=is_user,
+                    saved_time=m["timestamp"]
+                )
+        except Exception as ex:
+            print(f"❌ Ошибка восстановления сообщения: {ex}")
+        return None
+
+    def _save_text_msg(self, text: str, is_user: bool, quote: str = None):
+        """Сохраняет текстовое сообщение в БД."""
+        if not self.chat_id:
+            return
+        try:
+            db_ops.save_message(
+                chat_id=self.chat_id,
+                sender_id=self.CURRENT_USER["id"] if is_user else self.CONTACT_USER["id"],
+                msg_type="text",
+                content=text,
+                quote_text=quote,
+                is_user=is_user,
+            )
+        except Exception as ex:
+            print(f"❌ Ошибка сохранения текста: {ex}")
+
+    def _save_file_msg(self, file_path: str, file_name: str, msg_type: str,
+                       is_user: bool, one_time: bool = False):
+        """Сохраняет файловое сообщение в БД."""
+        if not self.chat_id:
+            return
+        try:
+            db_ops.save_message(
+                chat_id=self.chat_id,
+                sender_id=self.CURRENT_USER["id"] if is_user else self.CONTACT_USER["id"],
+                msg_type=msg_type,
+                file_path=file_path,
+                file_name=file_name,
+                is_user=is_user,
+                one_time=one_time,
+            )
+        except Exception as ex:
+            print(f"❌ Ошибка сохранения файла: {ex}")
 
     # ── Общие утилиты ─────────────────────────────────────────────────────────
 
@@ -207,7 +314,7 @@ class ChatUI:
         self.message_input.update()
 
     def _apply_block_state(self):
-        pass  # Поле ввода остаётся активным
+        pass
 
     # ── Файловые операции ─────────────────────────────────────────────────────
 
@@ -402,9 +509,10 @@ class ChatUI:
     # ── Создание пузырей ──────────────────────────────────────────────────────
 
     def create_text_message(self, text: str, is_user: bool = True,
-                            quote: str | None = None) -> ft.GestureDetector:
-        user_data     = self.CURRENT_USER if is_user else self.CONTACT_USER
-        children      = []
+                            quote: str | None = None,
+                            saved_time: str = None) -> ft.GestureDetector:
+        user_data = self.CURRENT_USER if is_user else self.CONTACT_USER
+        children  = []
 
         if quote:
             short = quote if len(quote) <= 60 else quote[:57] + "..."
@@ -425,10 +533,19 @@ class ChatUI:
         edited_tag   = ft.Text("", size=10, color=ft.Colors.WHITE54, italic=True)
         current_text = [text]
 
+        # Время: из сохранённой записи или текущее
+        display_time = _now_hm()
+        if saved_time:
+            try:
+                display_time = datetime.datetime.strptime(
+                    saved_time, "%Y-%m-%d %H:%M:%S").strftime("%H:%M")
+            except Exception:
+                pass
+
         children += [
             ft.Text(text, color=ft.Colors.WHITE, ref=msg_ref),
             ft.Row([edited_tag, ft.Container(expand=True),
-                    ft.Text(_now_hm(), size=12, color=ft.Colors.WHITE54)], spacing=0),
+                    ft.Text(display_time, size=12, color=ft.Colors.WHITE54)], spacing=0),
         ]
 
         bubble = ft.Container(
@@ -452,17 +569,26 @@ class ChatUI:
 
     def create_image_message(self, image_path: str, file_name: str,
                              is_user: bool = True,
-                             one_time_view: bool = False) -> ft.GestureDetector:
+                             one_time_view: bool = False,
+                             saved_time: str = None) -> ft.GestureDetector:
         user_data  = self.CURRENT_USER if is_user else self.CONTACT_USER
         message_id = f"img_{datetime.datetime.now().timestamp()}"
         is_viewed  = [message_id in self.viewed_once_ids]
+
+        display_time = _now_hm()
+        if saved_time:
+            try:
+                display_time = datetime.datetime.strptime(
+                    saved_time, "%Y-%m-%d %H:%M:%S").strftime("%H:%M")
+            except Exception:
+                pass
 
         def viewed_placeholder():
             return ft.Column([
                 ft.Icon(ft.Icons.VISIBILITY_OFF, size=80, color=ft.Colors.WHITE54),
                 ft.Text("Просмотрено", size=16, color=ft.Colors.WHITE,
                         weight=ft.FontWeight.BOLD),
-                ft.Text(_now_hm(), size=12, color=ft.Colors.WHITE54),
+                ft.Text(display_time, size=12, color=ft.Colors.WHITE54),
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10)
 
         def on_tap(e):
@@ -518,7 +644,7 @@ class ChatUI:
                                   on_click=lambda e: self.download_file(image_path, file_name),
                                   ) if not one_time_view else ft.Container(),
                 ], spacing=5),
-                ft.Text(_now_hm(), size=12, color=ft.Colors.WHITE54),
+                ft.Text(display_time, size=12, color=ft.Colors.WHITE54),
             ], tight=True, spacing=5)
 
         image_container = ft.Container(
@@ -535,8 +661,17 @@ class ChatUI:
         return widget
 
     def create_video_message(self, video_path: str, file_name: str,
-                             is_user: bool = True) -> ft.GestureDetector:
+                             is_user: bool = True,
+                             saved_time: str = None) -> ft.GestureDetector:
         user_data = self.CURRENT_USER if is_user else self.CONTACT_USER
+        display_time = _now_hm()
+        if saved_time:
+            try:
+                display_time = datetime.datetime.strptime(
+                    saved_time, "%Y-%m-%d %H:%M:%S").strftime("%H:%M")
+            except Exception:
+                pass
+
         bubble = ft.Container(
             content=ft.Column([
                 ft.Stack([
@@ -555,7 +690,7 @@ class ChatUI:
                                   icon_size=16, tooltip="Скачать",
                                   on_click=lambda e: self.download_file(video_path, file_name)),
                 ], spacing=5),
-                ft.Text(_now_hm(), size=12, color=ft.Colors.WHITE54),
+                ft.Text(display_time, size=12, color=ft.Colors.WHITE54),
             ], tight=True, spacing=5),
             bgcolor=self._bubble_color_dark(is_user),
             padding=10, border_radius=15,
@@ -571,9 +706,18 @@ class ChatUI:
 
     def create_audio_message(self, audio_path: str, file_name: str,
                              is_user: bool = True,
-                             one_time_view: bool = False):
+                             one_time_view: bool = False,
+                             saved_time: str = None):
         user_data = self.CURRENT_USER if is_user else self.CONTACT_USER
         abs_path  = os.path.abspath(audio_path)
+
+        display_time = _now_hm()
+        if saved_time:
+            try:
+                display_time = datetime.datetime.strptime(
+                    saved_time, "%Y-%m-%d %H:%M:%S").strftime("%H:%M")
+            except Exception:
+                pass
 
         if not os.path.exists(abs_path):
             return self.create_document_message(abs_path, f"❌ {file_name}",
@@ -586,13 +730,13 @@ class ChatUI:
         except Exception:
             duration = [180]
 
-        is_playing       = [False]
-        current_pos      = [0.0]
-        timer_ref        = [None]
-        audio_elem       = [None]
-        play_btn         = [None]
-        slider_ref       = [None]
-        time_text        = [None]
+        is_playing  = [False]
+        current_pos = [0.0]
+        timer_ref   = [None]
+        audio_elem  = [None]
+        play_btn    = [None]
+        slider_ref  = [None]
+        time_text   = [None]
 
         audio = ft.Audio(src=abs_path, autoplay=False, volume=1)
         audio_elem[0] = audio
@@ -683,7 +827,7 @@ class ChatUI:
                 ], spacing=5),
                 sld,
                 ft.Row([tm, ft.Container(expand=True),
-                        ft.Text(_now_hm(), size=12, color=ft.Colors.WHITE54)]),
+                        ft.Text(display_time, size=12, color=ft.Colors.WHITE54)]),
             ], tight=True, spacing=2),
             bgcolor=self._bubble_color_dark(is_user),
             padding=10, border_radius=15,
@@ -700,12 +844,21 @@ class ChatUI:
 
     def create_document_message(self, file_path: str, file_name: str,
                                 file_type: str,
-                                is_user: bool = True) -> ft.GestureDetector:
+                                is_user: bool = True,
+                                saved_time: str = None) -> ft.GestureDetector:
         user_data  = self.CURRENT_USER if is_user else self.CONTACT_USER
         size_text  = _file_size_str(file_path)
         clean_name = file_name
         for prefix in ("📄 ", "📝 ", "📊 ", "📃 ", "🗜️ ", "📎 "):
             clean_name = clean_name.replace(prefix, "")
+
+        display_time = _now_hm()
+        if saved_time:
+            try:
+                display_time = datetime.datetime.strptime(
+                    saved_time, "%Y-%m-%d %H:%M:%S").strftime("%H:%M")
+            except Exception:
+                pass
 
         bubble = ft.Container(
             content=ft.Column([
@@ -720,7 +873,7 @@ class ChatUI:
                                   icon_size=20, tooltip="Скачать",
                                   on_click=lambda e: self.download_file(file_path, clean_name)),
                 ], spacing=5),
-                ft.Text(_now_hm(), size=12, color=ft.Colors.WHITE54),
+                ft.Text(display_time, size=12, color=ft.Colors.WHITE54),
             ], tight=True, spacing=5),
             bgcolor=self._bubble_color_dark(is_user),
             padding=10, border_radius=15,
@@ -740,6 +893,8 @@ class ChatUI:
         if not text or self.is_blocked[0]:
             return
         quote = self.reply_to[0]
+        # Сохраняем в БД
+        self._save_text_msg(text, is_user=True, quote=quote)
         self.add_message_to_chat(self.create_text_message(text, is_user=True, quote=quote))
         try:
             conn.send_text({
@@ -821,11 +976,11 @@ class ChatUI:
         self.page.open(dlg)
 
     def add_file_to_chat(self, file_info: dict):
-        p           = file_info["path"]
-        name        = file_info["display_name"]
-        one_time    = file_info.get("one_time_view", False)
-        ftype       = _file_type(name)
-        saved_path  = self.auto_save_file(p, name)
+        p        = file_info["path"]
+        name     = file_info["display_name"]
+        one_time = file_info.get("one_time_view", False)
+        ftype    = _file_type(name)
+        saved_path = self.auto_save_file(p, name)
 
         self.send_file_via_ws(saved_path, name, ftype, one_time)
 
@@ -833,14 +988,18 @@ class ChatUI:
         if e in IMAGE_EXTS:
             widget = self.create_image_message(saved_path, name, is_user=True,
                                                one_time_view=one_time)
+            self._save_file_msg(saved_path, name, "image", is_user=True, one_time=one_time)
         elif e in VIDEO_EXTS:
             widget = self.create_video_message(saved_path, name, is_user=True)
+            self._save_file_msg(saved_path, name, "video", is_user=True)
         elif e in AUDIO_EXTS:
             widget = self.create_audio_message(saved_path, name, is_user=True,
                                                one_time_view=one_time)
+            self._save_file_msg(saved_path, name, "audio", is_user=True, one_time=one_time)
         else:
             widget = self.create_document_message(saved_path, f"📎 {name}",
                                                   "Файл", is_user=True)
+            self._save_file_msg(saved_path, f"📎 {name}", "document", is_user=True)
 
         self.messages_column.controls.append(widget)
         self.all_messages.append(widget)
@@ -863,15 +1022,24 @@ class ChatUI:
             shutil.copy2(save_path, os.path.join(ASSETS_FOLDER, os.path.basename(save_path)))
 
             e = _ext(file_name)
+            one_time = msg.get("one_time_view", False)
             if e in IMAGE_EXTS:
-                widget = self.create_image_message(save_path, file_name, is_user=False)
+                widget = self.create_image_message(save_path, file_name, is_user=False,
+                                                   one_time_view=one_time)
+                self._save_file_msg(save_path, file_name, "image", is_user=False,
+                                    one_time=one_time)
             elif e in VIDEO_EXTS:
                 widget = self.create_video_message(save_path, file_name, is_user=False)
+                self._save_file_msg(save_path, file_name, "video", is_user=False)
             elif e in AUDIO_EXTS:
-                widget = self.create_audio_message(save_path, file_name, is_user=False)
+                widget = self.create_audio_message(save_path, file_name, is_user=False,
+                                                   one_time_view=one_time)
+                self._save_file_msg(save_path, file_name, "audio", is_user=False,
+                                    one_time=one_time)
             else:
                 widget = self.create_document_message(save_path, f"📎 {file_name}",
                                                       "Файл", is_user=False)
+                self._save_file_msg(save_path, f"📎 {file_name}", "document", is_user=False)
             self.add_message_to_chat(widget)
         except Exception as e:
             print(f"❌ Ошибка получения файла: {e}")
@@ -890,6 +1058,8 @@ class ChatUI:
                     in_quote = msg.get("reply_to")
                     if (text and sender_id == self.CONTACT_USER["id"]
                             and not self.is_blocked[0]):
+                        # Сохраняем входящее текстовое сообщение
+                        self._save_text_msg(text, is_user=False, quote=in_quote)
                         self.add_message_to_chat(
                             self.create_text_message(text, is_user=False, quote=in_quote))
         except queue.Empty:
@@ -939,13 +1109,15 @@ class ChatUI:
                                       bgcolor=ft.Colors.BLUE, color=ft.Colors.WHITE),
                 ], alignment=ft.MainAxisAlignment.CENTER, spacing=10),
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10),
-            bgcolor=ft.Colors.WHITE, border_radius=10, padding=15,
+            bgcolor=ft.Colors.SURFACE, border_radius=10, padding=15,
             shadow=ft.BoxShadow(spread_radius=1, blur_radius=15,
                                 color=ft.Colors.BLACK54, offset=ft.Offset(0, 0)),
         )
 
     def _send_voice_message(self, audio_path: str, file_name: str, one_time: bool = False):
         saved = self.auto_save_file(audio_path, file_name)
+        self._save_file_msg(saved, "Голосовое сообщение", "audio",
+                            is_user=True, one_time=one_time)
         self.add_message_to_chat(
             self.create_audio_message(saved, "Голосовое сообщение",
                                       is_user=True, one_time_view=one_time))
@@ -979,7 +1151,7 @@ class ChatUI:
             b.update()
 
     def on_text_change(self, e):
-        has_text            = bool(self.message_input.value.strip())
+        has_text                = bool(self.message_input.value.strip())
         self.mic_btn.visible    = not has_text
         self.attach_btn.visible = not has_text
         self.send_btn.visible   = has_text
@@ -993,9 +1165,9 @@ class ChatUI:
             hint_text="Введите сообщение...",
             expand=True, multiline=True, min_lines=1, max_lines=3,
             on_change=self.on_text_change,
-            # FIX: серый фон в тёмной теме
-            bgcolor=ft.Colors.GREY_700 if is_dark else None,
-            border_color=ft.Colors.GREY_600 if is_dark else None,
+            bgcolor=None,
+            border_color=ft.Colors.GREY_600 if is_dark else ft.Colors.GREY_400,
+            focused_border_color=ft.Colors.BLUE,
         )
         self.file_picker = ft.FilePicker(on_result=self.on_file_picked)
         self.mic_btn = ft.IconButton(icon=ft.Icons.KEYBOARD_VOICE,
@@ -1021,13 +1193,10 @@ class ChatUI:
             bgcolor=ft.Colors.SURFACE,
         )
 
-        # Подписываемся на смену темы для обновления цвета поля ввода
         def _on_theme_change(e):
             dark = self.page.theme_mode == ft.ThemeMode.DARK
-            self.message_input.bgcolor      = ft.Colors.GREY_700 if dark else None
-            self.message_input.border_color = ft.Colors.GREY_600 if dark else None
+            self.message_input.border_color = ft.Colors.GREY_600 if dark else ft.Colors.GREY_400
             self.message_input.update()
-            # Обновляем цвет кнопки трёх точек
             self._popup_btn_ref.current.icon_color = (
                 ft.Colors.GREY_400 if dark else ft.Colors.BLACK
             )
@@ -1038,18 +1207,7 @@ class ChatUI:
     # ── Шапка чата ────────────────────────────────────────────────────────────
 
     def _build_header(self):
-        """
-        Строит шапку с динамическим меню:
-        - Первый пункт: «Сохранить контакт» (person_add) если not_save_user,
-          иначе «Редактировать» (edit).
-        - «Очистить чат» — красный.
-        - «Заблокировать/Разблокировать» — красный/зелёный, обновляется динамически.
-        - Кнопка ⋮ — чёрная при светлой теме, серая при тёмной.
-        """
         contact_id = self.CONTACT_USER.get("id")
-        is_dark    = self.page.theme_mode == ft.ThemeMode.DARK
-
-        # ── Первый пункт меню (сохранить / редактировать) ──────────────────
 
         def _first_item_click(e):
             status = _get_contact_status(contact_id)
@@ -1073,8 +1231,6 @@ class ChatUI:
                     on_click=_first_item_click,
                 )
 
-        # ── Пункт блокировки ───────────────────────────────────────────────
-
         def _block_item_click(e):
             self._toggle_block_from_menu()
             self._rebuild_popup_menu()
@@ -1084,8 +1240,6 @@ class ChatUI:
             return ft.PopupMenuItem(
                 text="Разблокировать пользователя" if blocked else "Заблокировать пользователя",
                 icon=ft.Icons.LOCK_OPEN if blocked else ft.Icons.BLOCK,
-                # Flet PopupMenuItem не поддерживает цвет текста напрямую,
-                # поэтому визуальный акцент через иконку; цвет иконки задаём через content
                 content=ft.Row([
                     ft.Icon(
                         ft.Icons.LOCK_OPEN if blocked else ft.Icons.BLOCK,
@@ -1100,8 +1254,6 @@ class ChatUI:
                 on_click=_block_item_click,
             )
 
-        # ── Пункт «Очистить чат» (красный) ────────────────────────────────
-
         def _make_clear_item():
             return ft.PopupMenuItem(
                 content=ft.Row([
@@ -1111,12 +1263,10 @@ class ChatUI:
                 on_click=lambda e: self.clear_all_chat(),
             )
 
-        # ── Сборка PopupMenuButton ─────────────────────────────────────────
-
         self._popup_btn = ft.PopupMenuButton(
             ref=self._popup_btn_ref,
             icon=ft.Icons.MORE_VERT,
-            icon_color=ft.Colors.GREY_400 if is_dark else ft.Colors.BLACK,
+            icon_color=ft.Colors.ON_SURFACE,
             items=[
                 _make_first_item(),
                 _make_clear_item(),
@@ -1132,32 +1282,29 @@ class ChatUI:
             ]
             self._popup_btn.update()
 
-        # Сохраняем для вызова из других методов
         self._rebuild_popup_menu = _rebuild_popup_menu
 
-        # ── Отображение последнего визита (убираем "None") ─────────────────
         last_seen_raw = self.CONTACT_USER.get("last_seen", "")
         last_seen_str = "" if (not last_seen_raw or str(last_seen_raw).lower() == "none") \
                         else str(last_seen_raw)
+
+        contact_info_row = ft.Row([
+            self.make_avatar(self.CONTACT_USER),
+            ft.Column([
+                ft.Text(self.CONTACT_USER["name"],
+                        weight=ft.FontWeight.BOLD, size=16),
+                ft.Text(last_seen_str,
+                        size=12, color=ft.Colors.GREY,
+                        visible=bool(last_seen_str)),
+            ], spacing=0),
+        ], alignment=ft.MainAxisAlignment.START)
 
         self.chat_header = ft.Container(
             content=ft.Row([
                 ft.IconButton(icon=ft.Icons.ARROW_BACK,
                               on_click=lambda e: self.page.go('/'),
                               icon_color=ft.Colors.BLUE),
-                ft.GestureDetector(
-                    content=ft.Row([
-                        self.make_avatar(self.CONTACT_USER),
-                        ft.Column([
-                            ft.Text(self.CONTACT_USER["name"],
-                                    weight=ft.FontWeight.BOLD, size=16),
-                            ft.Text(last_seen_str,
-                                    size=12, color=ft.Colors.GREY,
-                                    visible=bool(last_seen_str)),
-                        ], spacing=0),
-                    ], alignment=ft.MainAxisAlignment.START),
-                    on_tap=self.show_user_profile,
-                ),
+                contact_info_row,
                 ft.Container(expand=True),
                 self._popup_btn,
             ], alignment=ft.MainAxisAlignment.START),
@@ -1168,7 +1315,6 @@ class ChatUI:
     # ── Диалог сохранения контакта ────────────────────────────────────────────
 
     def _save_contact_dialog(self, contact_id):
-        """Показывает диалог сохранения нового контакта."""
         field = ft.TextField(
             value=self.CONTACT_USER.get("name", ""),
             label="Имя контакта",
@@ -1181,13 +1327,10 @@ class ChatUI:
             if not new_name:
                 return
             _save_contact_name_db(contact_id, new_name)
-            # Обновляем отображаемое имя в реальном времени
             self.CONTACT_USER["name"] = new_name
-            # Обновляем имя в шапке
             for ctrl in self.chat_header.content.controls:
-                if isinstance(ctrl, ft.GestureDetector):
-                    row = ctrl.content
-                    for item in row.controls:
+                if isinstance(ctrl, ft.Row):
+                    for item in ctrl.controls:
                         if isinstance(item, ft.Column):
                             item.controls[0].value = new_name
                             item.controls[0].update()
@@ -1251,13 +1394,10 @@ class ChatUI:
             on_click=toggle_block,
         )
 
-        # Убираем "None" из полей профиля
         about_val = self.CONTACT_USER.get("about", "") or ""
-        if str(about_val).lower() == "none":
-            about_val = ""
+        if str(about_val).lower() == "none": about_val = ""
         phone_val = self.CONTACT_USER.get("phone", "") or ""
-        if str(phone_val).lower() == "none":
-            phone_val = ""
+        if str(phone_val).lower() == "none": phone_val = ""
 
         dlg = ft.AlertDialog(
             content=ft.Container(
@@ -1301,7 +1441,6 @@ class ChatUI:
     # ── Методы меню (три точки) ───────────────────────────────────────────────
 
     def edit_chat(self):
-        """Редактирование имени сохранённого контакта с обновлением в БД и UI."""
         contact_id = self.CONTACT_USER.get("id")
         field = ft.TextField(
             value=self.CONTACT_USER["name"],
@@ -1314,15 +1453,11 @@ class ChatUI:
             new_name = field.value.strip()
             if not new_name:
                 return
-            # Сохраняем в БД
             _save_contact_name_db(contact_id, new_name)
-            # Обновляем в памяти
             self.CONTACT_USER["name"] = new_name
-            # Обновляем имя в шапке в реальном времени
             for ctrl in self.chat_header.content.controls:
-                if isinstance(ctrl, ft.GestureDetector):
-                    row = ctrl.content
-                    for item in row.controls:
+                if isinstance(ctrl, ft.Row):
+                    for item in ctrl.controls:
                         if isinstance(item, ft.Column):
                             item.controls[0].value = new_name
                             item.controls[0].update()
@@ -1352,11 +1487,20 @@ class ChatUI:
 
     def clear_all_chat(self):
         def confirm(e):
+            # Удаляем сообщения из БД
+            if self.chat_id:
+                try:
+                    db_ops.delete_messages_for_chat(self.chat_id)
+                except Exception as ex:
+                    print(f"❌ Ошибка удаления из БД: {ex}")
+
             self.messages_column.controls.clear()
             self.all_messages.clear()
             self.sent_media_files.clear()
             self.messages_column.update()
             self.page.close(dlg)
+
+            # Удаляем медиафайлы с диска
             for folder in (ASSETS_FOLDER, INCOMING_FOLDER, VOICE_FOLDER):
                 if os.path.exists(folder):
                     for filename in os.listdir(folder):

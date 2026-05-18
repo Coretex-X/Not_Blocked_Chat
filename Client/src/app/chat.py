@@ -6,8 +6,8 @@ from .components.chat import chat_connection as conn
 from .components.database import get_contact_id_by_chat, get_contact_display_name
 from .components.chat.chat_ui import ChatUI
 from .components.utils import format_phone
- 
- 
+
+
 def chat_view(page: ft.Page) -> ft.View:
     db_path    = f"{path.db_path()}user_data.db"
     chat_id    = get_chat_id()
@@ -15,7 +15,7 @@ def chat_view(page: ft.Page) -> ft.View:
     contact_id = get_contact_id_by_chat(db_path, chat_id)
     my_id      = db.get_current_user_id()
     contact    = db.get_contact_data(contact_id) if contact_id else None
- 
+
     if contact is None:
         contact_name  = "Неизвестный"
         contact_phone = "—"
@@ -24,7 +24,7 @@ def chat_view(page: ft.Page) -> ft.View:
         contact_name  = get_contact_display_name(db_path, contact_id)
         contact_phone = format_phone(str(contact[3]))
         contact_about = contact[2]
- 
+
     contact_user = {
         "id":           contact_id,
         "name":         contact_name,
@@ -41,13 +41,15 @@ def chat_view(page: ft.Page) -> ft.View:
         "status":       "None",
         "about":        "None",
     }
- 
+
     conn.start_connection(my_id, contact_id, status)
-    ui = ChatUI(page, current_user, contact_user)
- 
+
+    # Передаём chat_id в ChatUI для сохранения/загрузки истории
+    ui = ChatUI(page, current_user, contact_user, chat_id=chat_id)
+
     page.overlay.append(ui.file_picker)
     page.update()
- 
+
     # Колбэки для входящих сообщений (используются извне при необходимости)
     page.data = {
         "add_incoming_text": lambda text, sid=None: ui.add_message_to_chat(
@@ -61,9 +63,9 @@ def chat_view(page: ft.Page) -> ft.View:
         "add_incoming_document": lambda path, name, sid=None, ftype="Файл": ui.add_message_to_chat(
             ui.create_document_message(path, name, ftype, is_user=(sid == my_id))),
     }
- 
+
     ui.poll_queue()
- 
+
     return ft.View(
         "/chat",
         controls=[ft.Container(

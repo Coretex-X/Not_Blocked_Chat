@@ -29,7 +29,7 @@ class NumberUserView(APIView):
             "id": queryset.pk,
             "login": queryset.login,
             "number": queryset.number,
-            "status": queryset.status,
+            "status": queryset.profil,
             "post":status.HTTP_200_OK
             })
     
@@ -78,7 +78,7 @@ class UserUpdateView(APIView):
         # 7. Обновляем данные
         user.login = response_update_login
         user.number = response_update_number
-        user.status = response_update_status
+        user.profil = response_update_status
         user.save()
 
         return Response({

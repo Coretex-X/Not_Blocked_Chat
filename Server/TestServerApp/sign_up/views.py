@@ -3,7 +3,8 @@ from rest_framework.generics import *
 from rest_framework.views import *
 from rest_framework.exceptions import AuthenticationFailed
 from .models import *
-from .geniration_token import GuaranteedUniqueTokenGenerator
+from chat.models import UserNotification
+from .geniration_token import GuaranteedUniqueTokenGenerator, GuaranteedUniqueRoomGenerator
 from .serializer import Serializer
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from django.views.decorators.csrf import csrf_exempt
@@ -33,6 +34,9 @@ class RegistrationView(APIView):
         #Генерация токена
         geniration = GuaranteedUniqueTokenGenerator()
         token = geniration.generate_token(100)
+        #Генерация комнаты
+        generator_room = GuaranteedUniqueRoomGenerator()
+        room = generator_room.generate_room(110)
         
         #Запись данных в БД
         Models.objects.create(
@@ -40,7 +44,8 @@ class RegistrationView(APIView):
             email=response_email,
             number=response_number, 
             password=response_password_hash,
-            token=token
+            token=token,
+            room=room
             )
            
         return Response({"post":status.HTTP_201_CREATED})
@@ -62,7 +67,7 @@ class LoginView(APIView):
 
         #Проверка пользователя
         try:
-            queryset_login =  Models.objects.get(login=response_login)
+            queryset_data_user =  Models.objects.get(login=response_login)
         except Models.DoesNotExist:
             raise AuthenticationFailed({
                 'meaning': 'Неверные учетные данные',
@@ -70,14 +75,19 @@ class LoginView(APIView):
             })
         
         #проверка пороли
-        if queryset_login.check_password(response_password):
-           #Если всё верно возврощаем данные пользователя
+        if queryset_data_user.check_password(response_password):
+            UserNotification.objects.create(
+                user_id = queryset_data_user.id,
+                room=queryset_data_user.room
+            )
+            #Если всё верно возврощаем данные пользователя
             return Response({
-                'id_users':queryset_login.id,
+                'id_users':queryset_data_user.id,
                 'login': response_login,
-                'number':queryset_login.number,
-                'token':queryset_login.token,
-                'profil':'Приветствую в NBC!',
+                'number':queryset_data_user.number,
+                'token':queryset_data_user.token,
+                'profil':queryset_data_user.profil,
+                'room':queryset_data_user.room,
                 'status': status.HTTP_200_OK
                 })
         
@@ -86,18 +96,3 @@ class LoginView(APIView):
             'meaning': 'Неверные учетные данные',
             'status': status.HTTP_401_UNAUTHORIZED
         })
-    
-class UserStatusAPI(APIView):
-    def post(self, request):
-        online = 'online'
-        offline = 'offline'
-        action = request.data.get('action')
-        id_users = request.data.get('id_users')
-        
-        if action == online:
-            Models.objects.filter(pk=id_users).update(status=action)
-            return Response({"status": status.HTTP_200_OK})
-        
-        elif action == offline:
-            Models.objects.filter(pk=id_users).update(status=action)
-            return Response({"status": status.HTTP_404_NOT_FOUND})

@@ -22,12 +22,11 @@ redis_client = Redis(connection_pool=redis_pool)
 
 
 # Вспомогательная синхронная функция для проверки статуса пользователя
-# Вспомогательная синхронная функция для проверки статуса пользователя
 @sync_to_async
 def get_user_online_status(user_id):
     """Возвращает True если пользователь онлайн, иначе False"""
     try:
-        user = Models.objects.get(id=user_id)  # Ищем по первичному ключу id
+        user = Models.objects.get(id=user_id)
         return user.user_state_offline_online != 'offline'
     except Models.DoesNotExist:
         logger.warning(f"User with id {user_id} not found in Models")
@@ -38,7 +37,7 @@ def get_user_online_status(user_id):
 
 
 class BaseChatConsumer(AsyncWebsocketConsumer):
-    async def save_offline_message(self, sender_id, receiver_id, room, message_text):
+    async def save_offline_message(self, sender_id, receiver_id, room, message_text, chat_status):
         """Сохраняет сообщение в UserOff ТОЛЬКО если получатель офлайн"""
         try:
             # Проверяем статус получателя через синхронную функцию
@@ -53,14 +52,15 @@ class BaseChatConsumer(AsyncWebsocketConsumer):
             logger.info(f"Receiver {receiver_id} is offline, saving message to UserOff")
             
             await sync_to_async(UserOff.objects.create)(
-                message_recipient_ID=str(receiver_id),  # ID получателя
-                user_id=str(sender_id),                 # ID отправителя
-                guest_id=str(receiver_id),              # ID получателя (guest_id)
-                room=str(room),                         # Комната чата
-                message=message_text                    # Текст сообщения
+                message_recipient_ID=str(receiver_id),
+                user_id=str(sender_id),
+                guest_id=str(receiver_id),
+                room=str(room),
+                message=message_text,
+                status_chat=chat_status
             )
             
-            logger.info(f"Offline message saved successfully: {sender_id} -> {receiver_id} in room {room}")
+            logger.info(f"Offline message saved successfully: {sender_id} -> {receiver_id} in room {room} [{chat_status}]")
             return True
             
         except Exception as e:
@@ -170,7 +170,8 @@ class BaseChatConsumer(AsyncWebsocketConsumer):
         }).encode('utf-8')
 
         separator = b"|||BINARY_DATA|||"
-        await self.send(bytes_data=metadata + separator + file_data)        
+        await self.send(bytes_data=metadata + separator + file_data)
+
 
 class DataConsumer(AsyncWebsocketConsumer):
     @sync_to_async
@@ -314,12 +315,13 @@ class ChatConsumer(BaseChatConsumer):
                     logger.warning("Empty message received, ignoring")
                     return
 
-                # Попытка сохранить в офлайн, если получатель не в сети
+                # Сохраняем в офлайн с пометкой existing_chat
                 await self.save_offline_message(
                     sender_id=self.user_id,
                     receiver_id=self.guest_id,
                     room=self.room_name,
-                    message_text=message
+                    message_text=message,
+                    chat_status="existing_chat"
                 )
 
                 # Рассылка сообщения всем в комнате
@@ -405,12 +407,13 @@ class NewChatConsumer(BaseChatConsumer):
                     logger.warning("Empty message received, ignoring")
                     return
 
-                # Сохраняем в офлайн-сообщениях при необходимости
+                # Сохраняем в офлайн с пометкой new_chat
                 await self.save_offline_message(
                     sender_id=self.user_id,
                     receiver_id=self.guest_id,
                     room=self.room_name,
-                    message_text=message
+                    message_text=message,
+                    chat_status="new_chat"
                 )
 
                 await self.channel_layer.group_send(

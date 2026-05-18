@@ -113,3 +113,8 @@ class UserOff(models.Model):
     room = models.TextField()
     message = models.TextField()
     status_chat = models.TextField()
+
+
+class UserNotification(models.Model):
+    user_id = models.TextField()
+    room = models.TextField()

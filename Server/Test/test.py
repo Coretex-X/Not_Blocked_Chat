@@ -4,9 +4,27 @@ import queue
 import json
 import threading
 
-sesion = {
+
+json_login = {
+    "login":"User1",
+    "password":"12345678"
+}
+response_login = rq.post("http://127.0.0.1:5000/api/v2/user/login/", json=json_login)
+data = response_login.json()
+print(data)
+
+'''json_reqistartion = {
+    "login":"User2",
+    "email":"user2@mail.ru",
+    "number":"9999999992",
+    "password":"12345678"
+}
+response = rq.post("http://127.0.0.1:5000/api/v2/user/registration/", json=json_reqistartion)
+print(response)'''
+
+'''sesion = {
     "id_users": 2,
-    "token": "ojmdhfjilmanmnibdjodgoomdbohddodclokaedbomjdnceohkiecafgeejogihg%w=L&Qe$_z%y52T&C4ev?eCo]6$W-]URE_K#"
+    "token": "opjejcaggmlhjhkadodpfpkiihbbgbcogdgncmilfnpadnampoefaokkbpibjgni7Z&>$~IvI-O+t%'gz#<pFfSH?ICZ`*E1XOkT"
 }
 
 response = rq.post("http://127.0.0.1:5000/notification/v2/user/notification/", json=sesion)
@@ -17,7 +35,7 @@ try:
 except:
     print("Response is not JSON")
 
-'''
+
 # 1. Аутентификация
 ws_auth = websocket.WebSocket()
 ws_auth.connect("ws://127.0.0.1:5000/ws/data/")

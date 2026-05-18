@@ -2,6 +2,7 @@ import secrets
 import string
 import time
 import hashlib
+import random
 from typing import Set
 
 class GuaranteedUniqueTokenGenerator:
@@ -37,3 +38,19 @@ class GuaranteedUniqueTokenGenerator:
         return token in self.used_tokens
     def clear_history(self):
         self.used_tokens.clear()
+
+
+
+class GuaranteedUniqueRoomGenerator:
+    """Генератор гарантированно уникальной камнаты для чата."""
+
+    def __init__(self):
+        self._used: set = set()
+
+    def generate_room(self, length: int = 90) -> str:
+        chars = string.ascii_letters + string.digits
+        while True:
+            token = ''.join(random.choices(chars, k=length))
+            if token not in self._used:
+                self._used.add(token)
+                return token

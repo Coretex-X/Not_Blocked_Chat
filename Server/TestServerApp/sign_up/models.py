@@ -7,11 +7,12 @@ class Models(models.Model):
     login = models.CharField(max_length=225, unique=True)
     email = models.EmailField(unique=True)
     number = models.TextField(unique=True)
-    status = models.TextField(default='Приветствую в NBC!')
+    profil = models.TextField(default='Приветствую в NBC!')
     password = models.TextField()
     token = models.TextField(unique=True)
     #sessuon_token_id_consuner = models.TextField(unique=True)
     user_state_offline_online = models.TextField()
+    room = models.TextField()
 
     def check_password(self, raw_password):
         return check_password(raw_password, self.password)

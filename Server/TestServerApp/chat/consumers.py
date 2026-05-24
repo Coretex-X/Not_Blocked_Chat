@@ -1,6 +1,6 @@
 # consumers.py
 from channels.generic.websocket import AsyncWebsocketConsumer
-from .models import UserData, UserOff
+from .models import UserData, UserOff, UserNotification
 from datetime import datetime
 import json
 import base64
@@ -37,15 +37,40 @@ def get_user_online_status(user_id):
 
 
 class BaseChatConsumer(AsyncWebsocketConsumer):
+    async def is_user_in_room(self, user_id, room_name):
+        """Проверяет, находится ли пользователь в данный момент в комнате чата"""
+        try:
+            return await redis_client.sismember(f"user_rooms:{user_id}", room_name)
+        except Exception as e:
+            logger.error(f"Error checking user room: {e}")
+            return False
+
     async def save_offline_message(self, sender_id, receiver_id, room, message_text, chat_status):
         """Сохраняет сообщение в UserOff ТОЛЬКО если получатель офлайн"""
         try:
-            # Проверяем статус получателя через синхронную функцию
             is_online = await get_user_online_status(receiver_id)
             
-            # Если получатель онлайн - НЕ сохраняем сообщение
+            # Если получатель онлайн - НЕ сохраняем
             if is_online:
-                logger.info(f"Receiver {receiver_id} is online, message NOT saved to UserOff")
+                logger.info(f"Receiver {receiver_id} is online, checking room presence")
+                
+                # Проверяем, в этой ли он комнате
+                in_room = await self.is_user_in_room(receiver_id, room)
+                
+                if not in_room:
+                    # Получатель онлайн, но не в этой комнате - шлём уведомление
+                    logger.info(f"Receiver {receiver_id} not in room {room}, sending notification")
+                    await self.channel_layer.group_send(
+                        f"user_{receiver_id}",
+                        {
+                            "type": "new_message.notification",
+                            "room": str(room),
+                            "sender_id": str(sender_id),
+                            "message": message_text,
+                            "status_chat": chat_status
+                        }
+                    )
+                
                 return False
             
             # Если получатель офлайн - сохраняем сообщение
@@ -60,7 +85,7 @@ class BaseChatConsumer(AsyncWebsocketConsumer):
                 status_chat=chat_status
             )
             
-            logger.info(f"Offline message saved successfully: {sender_id} -> {receiver_id} in room {room} [{chat_status}]")
+            logger.info(f"Offline message saved: {sender_id} -> {receiver_id} in room {room}")
             return True
             
         except Exception as e:
@@ -296,13 +321,21 @@ class ChatConsumer(BaseChatConsumer):
         self.guest_id = session_data["guest_id"]
         self.room_group_name = f"chat_{self.room_name}"
 
+        # Добавляем в группу чата
         await self.channel_layer.group_add(self.room_group_name, self.channel_name)
+        
+        # Отмечаем в Redis что пользователь в этой комнате
+        await redis_client.sadd(f"user_rooms:{self.user_id}", self.room_name)
+        
         await self.accept()
 
         logger.info(f"User {self.user_id} connected to existing chat {self.room_name}")
 
     async def disconnect(self, close_code):
         if hasattr(self, 'room_group_name'):
+            # Удаляем из Redis информацию что пользователь в комнате
+            await redis_client.srem(f"user_rooms:{self.user_id}", self.room_name)
+            
             await self.channel_layer.group_discard(self.room_group_name, self.channel_name)
             logger.info(f"User {self.user_id} disconnected from chat {self.room_name}")
 
@@ -315,7 +348,7 @@ class ChatConsumer(BaseChatConsumer):
                     logger.warning("Empty message received, ignoring")
                     return
 
-                # Сохраняем в офлайн с пометкой existing_chat
+                # Проверяем и сохраняем если нужно (online но не в комнате / offline)
                 await self.save_offline_message(
                     sender_id=self.user_id,
                     receiver_id=self.guest_id,
@@ -324,7 +357,7 @@ class ChatConsumer(BaseChatConsumer):
                     chat_status="existing_chat"
                 )
 
-                # Рассылка сообщения всем в комнате
+                # Рассылка сообщения в комнату чата
                 await self.channel_layer.group_send(
                     self.room_group_name,
                     {
@@ -385,16 +418,25 @@ class NewChatConsumer(BaseChatConsumer):
         self.guest_id = session_data["guest_id"]
         self.room_group_name = f"chat_{self.room_name}"
 
+        # Создаём записи в БД для обоих пользователей
         await self.add_chat(self.user_id, self.guest_id, self.room_name)
         await self.add_chat(self.guest_id, self.user_id, self.room_name)
 
+        # Добавляем в группу чата
         await self.channel_layer.group_add(self.room_group_name, self.channel_name)
+        
+        # Отмечаем в Redis что пользователь в этой комнате
+        await redis_client.sadd(f"user_rooms:{self.user_id}", self.room_name)
+        
         await self.accept()
 
         logger.info(f"User {self.user_id} created new chat {self.room_name} with {self.guest_id}")
 
     async def disconnect(self, close_code):
         if hasattr(self, 'room_group_name'):
+            # Удаляем из Redis информацию что пользователь в комнате
+            await redis_client.srem(f"user_rooms:{self.user_id}", self.room_name)
+            
             await self.channel_layer.group_discard(self.room_group_name, self.channel_name)
             logger.info(f"User {self.user_id} disconnected from new chat {self.room_name}")
 
@@ -407,7 +449,7 @@ class NewChatConsumer(BaseChatConsumer):
                     logger.warning("Empty message received, ignoring")
                     return
 
-                # Сохраняем в офлайн с пометкой new_chat
+                # Проверяем и сохраняем если нужно (online но не в комнате / offline)
                 await self.save_offline_message(
                     sender_id=self.user_id,
                     receiver_id=self.guest_id,
@@ -416,6 +458,7 @@ class NewChatConsumer(BaseChatConsumer):
                     chat_status="new_chat"
                 )
 
+                # Рассылка сообщения в комнату чата
                 await self.channel_layer.group_send(
                     self.room_group_name,
                     {
@@ -433,151 +476,270 @@ class NewChatConsumer(BaseChatConsumer):
             await self.handle_binary_data(bytes_data)
 
 
+class NotificationConsumer(AsyncWebsocketConsumer):
+    @sync_to_async
+    def set_user_online(self, user_id):
+        """Устанавливает статус пользователя 'online'"""
+        try:
+            user = Models.objects.get(id=user_id)
+            user.user_state_offline_online = 'online'
+            user.save()
+            logger.info(f"User {user_id} set to ONLINE")
+            return True
+        except Models.DoesNotExist:
+            logger.warning(f"User {user_id} not found in Models")
+            return False
+        except Exception as e:
+            logger.error(f"Error setting user online: {e}")
+            return False
+
+    @sync_to_async
+    def set_user_offline(self, user_id):
+        """Устанавливает статус пользователя 'offline'"""
+        try:
+            user = Models.objects.get(id=user_id)
+            user.user_state_offline_online = 'offline'
+            user.save()
+            logger.info(f"User {user_id} set to OFFLINE")
+            return True
+        except Models.DoesNotExist:
+            logger.warning(f"User {user_id} not found in Models")
+            return False
+        except Exception as e:
+            logger.error(f"Error setting user offline: {e}")
+            return False
+
+    @sync_to_async
+    def check_room_access(self, user_id, room):
+        """Проверяет, есть ли у пользователя доступ к комнате"""
+        try:
+            has_access = UserNotification.objects.filter(
+                user_id=str(user_id),
+                room=str(room)
+            ).exists()
+            return has_access
+        except Exception as e:
+            logger.error(f"Error checking room access: {e}")
+            return False
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-'''class YourConsumer(AsyncWebsocketConsumer):
-    
     async def connect(self):
         await self.accept()
-        logger.info(f"Echo connection accepted: {self.channel_name}")
-    
+        self.user_id = None
+        self.user_group_name = None
+        logger.info(f"Notification connection accepted: {self.channel_name}")
+
     async def disconnect(self, close_code):
-        logger.info(f"Echo connection closed: {self.channel_name}")
-    
+        # При отключении ставим статус offline
+        if self.user_id:
+            await self.set_user_offline(self.user_id)
+            # Убираем из группы уведомлений
+            if self.user_group_name:
+                await self.channel_layer.group_discard(
+                    self.user_group_name, 
+                    self.channel_name
+                )
+        logger.info(f"Notification disconnected: {self.channel_name}, code: {close_code}")
+
     async def receive(self, text_data):
         try:
             data = json.loads(text_data)
-            message = data.get("message", "")
+            user_id = data.get("user_id")
+            room = data.get("room")
             
-            await self.send(text_data=json.dumps({
-                "message": message,
+            if not user_id or not room:
+                logger.warning("Missing user_id or room in notification connect")
+                await self.send(json.dumps({
+                    "type": "error",
+                    "message": "Missing user_id or room"
+                }))
+                await self.close(code=4003)
+                return
+            
+            # Проверяем доступ к комнате
+            has_access = await self.check_room_access(user_id, room)
+            if not has_access:
+                logger.warning(f"User {user_id} has no access to room {room}")
+                await self.send(json.dumps({
+                    "type": "error",
+                    "message": "Access denied to this room"
+                }))
+                await self.close(code=4003)
+                return
+            
+            # Устанавливаем статус online
+            success = await self.set_user_online(user_id)
+            if not success:
+                await self.send(json.dumps({
+                    "type": "error",
+                    "message": "User not found"
+                }))
+                await self.close(code=4003)
+                return
+            
+            self.user_id = user_id
+            self.user_group_name = f"user_{user_id}"
+            
+            # Добавляем в персональную группу уведомлений
+            await self.channel_layer.group_add(
+                self.user_group_name,
+                self.channel_name
+            )
+            
+            logger.info(f"User {user_id} registered for notifications, room {room} access verified")
+            
+            # Подтверждаем подключение
+            await self.send(json.dumps({
+                "type": "connected",
+                "status": "online",
+                "user_id": user_id,
+                "room": room
             }))
             
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON in notification data: {e}")
+            await self.close(code=4003)
         except Exception as e:
-            logger.error(f"Error in echo consumer: {e}", exc_info=True)
+            logger.error(f"Error in notification receive: {e}")
+            await self.close(code=4003)
+
+    async def new_message_notification(self, event):
+        """Отправляет уведомление о новом сообщении клиенту"""
+        await self.send(text_data=json.dumps({
+            "type": "new_message",
+            "room": event.get("room"),
+            "sender_id": event.get("sender_id"),
+            "message": event.get("message"),
+            "status_chat": event.get("status_chat")
+        }, ensure_ascii=False))
+    
+    async def status_changed(self, event):
+        """Уведомляет об изменении статуса собеседника"""
+        await self.send(text_data=json.dumps({
+            "type": "status_changed",
+            "user_id": event.get("user_id"),
+            "status": event.get("status")
+        }, ensure_ascii=False))
 
 
 
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+'''
 class GroupDataConsumer(AsyncWebsocketConsumer):
     @sync_to_async
     def check_group_access(self, user_id, group_id, action):
@@ -871,9 +1033,6 @@ class GroupChatConsumer(BaseChatConsumer):
         }).encode('utf-8')
         separator = b"|||BINARY_DATA|||"
         await self.send(bytes_data=metadata + separator + file_data)
-
-class NotificationConsumer(AsyncWebsocketConsumer):
-    pass
 
 async def broadcast_user_status(user_id, status, room_ids):
     from channels.layers import get_channel_layer

@@ -2,7 +2,7 @@ import asyncio
 import websockets
 import json
 import requests
-
+'''
 x = '".rSSm9.v$d$kZ6f'
 
 # ===== НАСТРОЙКИ (МЕНЯЙ ТОЛЬКО ЗДЕСЬ) =====
@@ -192,4 +192,127 @@ async def main():
             else:
                 print("[ОШИБКА] Сначала войди в чат (команда chat)")
 
-asyncio.run(main())
+asyncio.run(main())'''
+
+'''import websocket
+import json
+
+# ===== НАСТРОЙКИ =====
+USER_ID = 2
+NOTIFICATION_ROOM = "ciwYBfMXR3qLTicFMkbUQoySuS1XXE2aIJAImWEM0I2ZwYch0WqXDZpRBzKMPLjUeV2MREPYaT0x7c3UxDaIUW88jDZut48TxrMJRcL9LKDKUw"
+
+WS_HOST = "ws://127.0.0.1:5000"
+
+# ===== ПОДКЛЮЧЕНИЕ =====
+ws_notif = websocket.WebSocket()
+ws_notif.connect(f"{WS_HOST}/ws/notifications/")
+ws_notif.send(json.dumps({
+    "user_id": USER_ID,
+    "room": NOTIFICATION_ROOM
+}))
+
+response = ws_notif.recv()
+print(f"Подключено: {response}")
+print("Ожидание уведомлений...\n")
+
+# ===== СЛУШАЕМ =====
+while True:
+    try:
+        message = ws_notif.recv()
+        print(message)
+    except Exception as e:
+        print(f"Ошибка: {e}")
+        break
+
+ws_notif.close()'''
+
+
+import websocket
+import json
+import threading
+import queue
+
+# ===== НАСТРОЙКИ =====
+USER_ID = 1
+NOTIFICATION_ROOM = "XVrYLQc7gdiSX4IVmSPlPGr2XU7WntzWA25gxqjMyFwVQWhtquLhItcWR9C94D8ylRjJBJH21GTDzPPN1dzhABq7Q94j8sf95HNzUf7qgleI0t"
+ROOM_CHAT = "lobbi1"
+GUEST_ID = 2
+STATUS_CHAT = "existing_chat"
+CHAT_TOKEN = "api87"
+
+WS_HOST = "ws://127.0.0.1:5000"
+
+# Очередь для сообщений чата
+message_queue = queue.Queue()
+
+# ===== 1. ПОДКЛЮЧЕНИЕ УВЕДОМЛЕНИЙ (автоматически) =====
+ws_notif = websocket.WebSocket()
+ws_notif.connect(f"{WS_HOST}/ws/notifications/")
+ws_notif.send(json.dumps({
+    "user_id": USER_ID,
+    "room": NOTIFICATION_ROOM
+}))
+
+response = ws_notif.recv()
+print(f"[УВЕДОМЛЕНИЯ] Подключено: {response}")
+
+
+def receive_notifications():
+    while True:
+        try:
+            message = ws_notif.recv()
+            print(message)
+        except Exception as e:
+            print(f"[УВЕДОМЛЕНИЯ] Ошибка: {e}")
+            break
+
+
+notif_thread = threading.Thread(target=receive_notifications, daemon=True)
+notif_thread.start()
+
+# ===== 2. АУТЕНТИФИКАЦИЯ ЧАТА =====
+ws_auth = websocket.WebSocket()
+ws_auth.connect(f"{WS_HOST}/ws/data/")
+ws_auth.send(json.dumps({
+    "room": ROOM_CHAT,
+    "user_id": USER_ID,
+    "guest_id": GUEST_ID,
+    "status_chat": STATUS_CHAT,
+    "token": CHAT_TOKEN
+}))
+auth_response = ws_auth.recv()
+print(f"[АВТОРИЗАЦИЯ] {auth_response}")
+ws_auth.close()
+
+# ===== 3. ПОДКЛЮЧЕНИЕ К ЧАТУ =====
+ws_chat = websocket.WebSocket()
+if STATUS_CHAT == "new_chat":
+    ws_chat.connect(f"{WS_HOST}/ws/new_chat_user/{CHAT_TOKEN}/")
+else:
+    ws_chat.connect(f"{WS_HOST}/ws/chat_user/{CHAT_TOKEN}/")
+print(f"[ЧАТ] Подключен к {ROOM_CHAT}")
+
+
+def receive_chat():
+    while True:
+        try:
+            message = ws_chat.recv()
+            print(message)
+            message_queue.put(message)
+        except Exception as e:
+            print(f"[ЧАТ] Отключен: {e}")
+            break
+
+
+chat_thread = threading.Thread(target=receive_chat, daemon=True)
+chat_thread.start()
+
+# ===== 4. ОСНОВНОЙ ЦИКЛ =====
+while True:
+    message = input()
+    if message == "exit":
+        break
+    ws_chat.send(json.dumps({"message": message}))
+
+ws_chat.close()
+ws_notif.close()

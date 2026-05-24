@@ -1,3 +1,207 @@
+//chat_db.py
+import sqlite3 as sql
+import datetime
+import path
+
+_db_path = f"{path.db_path()}user_data.db"
+
+
+def get_current_user_id():
+    """Возвращает id_user текущего пользователя."""
+    with sql.connect(_db_path) as con:
+        cur = con.cursor()
+        cur.execute("SELECT id_user FROM users_data")
+        row = cur.fetchone()
+        return row[0] if row else None
+
+
+def get_contact_data(contact_id):
+    """Возвращает полную строку contacts по user_id контакта."""
+    with sql.connect(_db_path) as con:
+        cur = con.cursor()
+        cur.execute("SELECT * FROM contacts WHERE user_id = ?", (contact_id,))
+        return cur.fetchone()
+
+
+# ── История сообщений ─────────────────────────────────────────────────────────
+
+def init_messages_table():
+    """Создаёт таблицу messages если её нет."""
+    with sql.connect(_db_path) as con:
+        cur = con.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS messages (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id     INTEGER NOT NULL,
+                sender_id   INTEGER,
+                msg_type    TEXT    NOT NULL DEFAULT 'text',
+                content     TEXT,
+                file_path   TEXT,
+                file_name   TEXT,
+                quote_text  TEXT,
+                is_user     INTEGER NOT NULL DEFAULT 1,
+                one_time    INTEGER NOT NULL DEFAULT 0,
+                timestamp   TEXT    NOT NULL,
+                FOREIGN KEY (chat_id) REFERENCES chats(chat_id)
+            )
+        """)
+        con.commit()
+
+
+def save_message(chat_id: int, sender_id, msg_type: str, content: str = None,
+                 file_path: str = None, file_name: str = None,
+                 quote_text: str = None, is_user: bool = True,
+                 one_time: bool = False) -> int:
+    """
+    Сохраняет сообщение в БД. Возвращает id новой записи.
+    msg_type: 'text' | 'image' | 'video' | 'audio' | 'document'
+    """
+    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with sql.connect(_db_path) as con:
+        cur = con.cursor()
+        cur.execute("""
+            INSERT INTO messages
+                (chat_id, sender_id, msg_type, content, file_path, file_name,
+                 quote_text, is_user, one_time, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (chat_id, sender_id, msg_type,
+              content, file_path, file_name,
+              quote_text, 1 if is_user else 0,
+              1 if one_time else 0, ts))
+        con.commit()
+        # Обновляем last_message в чате
+        preview = content if content else (file_name or "Медиафайл")
+        if len(preview) > 80:
+            preview = preview[:77] + "..."
+        cur.execute("""
+            UPDATE chats SET last_message = ?, last_message_time = ?
+            WHERE chat_id = ?
+        """, (preview, ts, chat_id))
+        con.commit()
+        return cur.lastrowid
+
+
+def load_messages(chat_id: int) -> list:
+    """
+    Загружает все сообщения чата в хронологическом порядке.
+    Возвращает список словарей.
+    """
+    with sql.connect(_db_path) as con:
+        cur = con.cursor()
+        cur.execute("""
+            SELECT id, sender_id, msg_type, content, file_path, file_name,
+                   quote_text, is_user, one_time, timestamp
+            FROM messages
+            WHERE chat_id = ?
+            ORDER BY id ASC
+        """, (chat_id,))
+        rows = cur.fetchall()
+    return [
+        {
+            "id":         r[0],
+            "sender_id":  r[1],
+            "msg_type":   r[2],
+            "content":    r[3],
+            "file_path":  r[4],
+            "file_name":  r[5],
+            "quote_text": r[6],
+            "is_user":    bool(r[7]),
+            "one_time":   bool(r[8]),
+            "timestamp":  r[9],
+        }
+        for r in rows
+    ]
+
+
+def delete_messages_for_chat(chat_id: int):
+    """Удаляет все сообщения чата из БД (для «Очистить чат»)."""
+    with sql.connect(_db_path) as con:
+        cur = con.cursor()
+        cur.execute("DELETE FROM messages WHERE chat_id = ?", (chat_id,))
+        cur.execute(
+            "UPDATE chats SET last_message = NULL, last_message_time = NULL WHERE chat_id = ?",
+            (chat_id,)
+        )
+        con.commit()
+
+
+def delete_single_message(msg_db_id: int):
+    """Удаляет одно сообщение и обновляет last_message чата."""
+    with sql.connect(_db_path) as con:
+        cur = con.cursor()
+        # Узнаём chat_id удаляемого сообщения
+        cur.execute("SELECT chat_id FROM messages WHERE id = ?", (msg_db_id,))
+        row = cur.fetchone()
+        chat_id = row[0] if row else None
+
+        cur.execute("DELETE FROM messages WHERE id = ?", (msg_db_id,))
+        con.commit()
+
+        # Обновляем last_message: берём последнее оставшееся сообщение
+        if chat_id:
+            cur.execute("""
+                SELECT content, file_name, timestamp FROM messages
+                WHERE chat_id = ?
+                ORDER BY id DESC LIMIT 1
+            """, (chat_id,))
+            last = cur.fetchone()
+            if last:
+                preview = last[0] if last[0] else (last[1] or "Медиафайл")
+                if len(preview) > 80:
+                    preview = preview[:77] + "..."
+                cur.execute(
+                    "UPDATE chats SET last_message = ?, last_message_time = ? WHERE chat_id = ?",
+                    (preview, last[2], chat_id)
+                )
+            else:
+                cur.execute(
+                    "UPDATE chats SET last_message = NULL, last_message_time = NULL WHERE chat_id = ?",
+                    (chat_id,)
+                )
+            con.commit()
+
+
+def update_message_content(msg_db_id: int, new_content: str):
+    """Обновляет текст сообщения и last_message чата если это последнее сообщение."""
+    with sql.connect(_db_path) as con:
+        cur = con.cursor()
+        # Узнаём chat_id сообщения
+        cur.execute("SELECT chat_id FROM messages WHERE id = ?", (msg_db_id,))
+        row = cur.fetchone()
+        chat_id = row[0] if row else None
+
+        cur.execute(
+            "UPDATE messages SET content = ? WHERE id = ?",
+            (new_content, msg_db_id)
+        )
+        con.commit()
+
+        # Если это последнее сообщение чата — обновляем превью
+        if chat_id:
+            cur.execute("""
+                SELECT id FROM messages
+                WHERE chat_id = ?
+                ORDER BY id DESC LIMIT 1
+            """, (chat_id,))
+            last_row = cur.fetchone()
+            if last_row and last_row[0] == msg_db_id:
+                preview = new_content if new_content else "Медиафайл"
+                if len(preview) > 80:
+                    preview = preview[:77] + "..."
+                cur.execute(
+                    "UPDATE chats SET last_message = ? WHERE chat_id = ?",
+                    (preview, chat_id)
+                )
+                con.commit()
+
+
+
+
+
+
+
+
+//chat_ui.py
 import flet as ft
 import datetime
 import os
@@ -1548,3 +1752,913 @@ class ChatUI:
             ],
         )
         self.page.open(dlg)
+
+
+
+
+
+//consumer.py
+# consumers.py
+# consumers.py
+from channels.generic.websocket import AsyncWebsocketConsumer
+from .models import UserData, UserOff
+from datetime import datetime
+import json
+import base64
+from redis.asyncio import Redis
+from redis.asyncio.connection import ConnectionPool
+from asgiref.sync import sync_to_async
+from sign_up.models import Models
+import logging
+
+logger = logging.getLogger(__name__)
+
+redis_pool = ConnectionPool.from_url(
+    'redis://localhost:6379/0',
+    max_connections=100,
+    decode_responses=True,
+    socket_keepalive=True
+)
+redis_client = Redis(connection_pool=redis_pool)
+
+
+# Вспомогательная синхронная функция для проверки статуса пользователя
+@sync_to_async
+def get_user_online_status(user_id):
+    """Возвращает True если пользователь онлайн, иначе False"""
+    try:
+        user = Models.objects.get(id=user_id)
+        return user.user_state_offline_online != 'offline'
+    except Models.DoesNotExist:
+        logger.warning(f"User with id {user_id} not found in Models")
+        return False
+    except Exception as e:
+        logger.error(f"Error checking status for user {user_id}: {e}")
+        return False
+
+
+class BaseChatConsumer(AsyncWebsocketConsumer):
+    async def is_user_in_room(self, user_id, room_name):
+        """Проверяет, находится ли пользователь в данный момент в комнате чата"""
+        try:
+            return await redis_client.sismember(f"user_rooms:{user_id}", room_name)
+        except Exception as e:
+            logger.error(f"Error checking user room: {e}")
+            return False
+
+    async def save_offline_message(self, sender_id, receiver_id, room, message_text, chat_status):
+        """Сохраняет сообщение в UserOff ТОЛЬКО если получатель офлайн"""
+        try:
+            is_online = await get_user_online_status(receiver_id)
+            
+            # Если получатель онлайн - НЕ сохраняем
+            if is_online:
+                logger.info(f"Receiver {receiver_id} is online, checking room presence")
+                
+                # Проверяем, в этой ли он комнате
+                in_room = await self.is_user_in_room(receiver_id, room)
+                
+                if not in_room:
+                    # Получатель онлайн, но не в этой комнате - шлём уведомление
+                    logger.info(f"Receiver {receiver_id} not in room {room}, sending notification")
+                    await self.channel_layer.group_send(
+                        f"user_{receiver_id}",
+                        {
+                            "type": "new_message.notification",
+                            "room": str(room),
+                            "sender_id": str(sender_id),
+                            "message": message_text,
+                            "status_chat": chat_status
+                        }
+                    )
+                
+                return False
+            
+            # Если получатель офлайн - сохраняем сообщение
+            logger.info(f"Receiver {receiver_id} is offline, saving message to UserOff")
+            
+            await sync_to_async(UserOff.objects.create)(
+                message_recipient_ID=str(receiver_id),
+                user_id=str(sender_id),
+                guest_id=str(receiver_id),
+                room=str(room),
+                message=message_text,
+                status_chat=chat_status
+            )
+            
+            logger.info(f"Offline message saved: {sender_id} -> {receiver_id} in room {room}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error in save_offline_message: {e}", exc_info=True)
+            return False
+
+    async def validate_token_and_get_session(self, token_session, session_type):
+        try:
+            session_data = await redis_client.get(f"session:{session_type}:{token_session}")
+            if session_data is None:
+                logger.warning(f"Session not found or expired: {session_type}:{token_session}")
+                return None
+
+            data = json.loads(session_data)
+            token = data.get("token")
+
+            if token != token_session:
+                logger.warning(f"Token mismatch: expected {token}, got {token_session}")
+                return None
+
+            await redis_client.delete(f"session:{session_type}:{token_session}")
+            logger.info(f"Session validated and deleted: {session_type}:{token_session}")
+            return data
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON in session data: {e}", exc_info=True)
+            return None
+        except Exception as e:
+            logger.error(f"Error validating token: {e}", exc_info=True)
+            raise
+
+    async def handle_binary_data(self, bytes_data):
+        """Обработка бинарных файлов (без сохранения в БД)"""
+        try:
+            separator = b"|||BINARY_DATA|||"
+            separator_index = bytes_data.find(separator)
+
+            if separator_index == -1:
+                logger.error("Invalid binary data format: separator not found")
+                return False
+
+            metadata_bytes = bytes_data[:separator_index]
+            file_data = bytes_data[separator_index + len(separator):]
+
+            metadata = json.loads(metadata_bytes.decode('utf-8'))
+            file_name = metadata.get("file_name", "unknown")
+            file_type = metadata.get("file_type", "application/octet-stream")
+            file_size = metadata.get("file_size", len(file_data))
+
+            MAX_FILE_SIZE = 50 * 1024 * 1024
+            if file_size > MAX_FILE_SIZE:
+                logger.warning(f"File too large: {file_size} bytes (max {MAX_FILE_SIZE})")
+                await self.send(text_data=json.dumps({
+                    "error": "File too large",
+                    "max_size": MAX_FILE_SIZE
+                }))
+                return False
+
+            logger.info(f"Received file: {file_name} ({file_type}, {file_size} bytes) from user {self.user_id}")
+
+            file_data_base64 = base64.b64encode(file_data).decode('utf-8')
+
+            await self.channel_layer.group_send(
+                self.room_group_name,
+                {
+                    "type": "chat.file",
+                    "file_name": file_name,
+                    "file_type": file_type,
+                    "file_size": file_size,
+                    "file_data": file_data_base64,
+                    "sender_id": self.user_id
+                }
+            )
+            return True
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON in file metadata: {e}", exc_info=True)
+            return False
+        except Exception as e:
+            logger.error(f"Error processing binary data: {e}", exc_info=True)
+            return False
+
+    async def chat_message(self, event):
+        message = event.get("message", "")
+        sender_id = event.get("sender_id")
+        await self.send(text_data=json.dumps({
+            "type": "message",
+            "message": message,
+            "sender_id": sender_id
+        }, ensure_ascii=False))
+
+    async def chat_file(self, event):
+        file_name = event.get("file_name")
+        file_type = event.get("file_type")
+        file_size = event.get("file_size")
+        file_data_base64 = event.get("file_data")
+        sender_id = event.get("sender_id")
+
+        file_data = base64.b64decode(file_data_base64)
+
+        metadata = json.dumps({
+            "type": "file",
+            "file_name": file_name,
+            "file_type": file_type,
+            "file_size": file_size,
+            "sender_id": sender_id
+        }).encode('utf-8')
+
+        separator = b"|||BINARY_DATA|||"
+        await self.send(bytes_data=metadata + separator + file_data)
+
+
+class DataConsumer(AsyncWebsocketConsumer):
+    @sync_to_async
+    def check_access(self, id_user, guest_id, room_chat, status_chat):
+        try:
+            if status_chat == "existing_chat":
+                user_exists = UserData.objects.filter(
+                    user_id=str(id_user),
+                    guest_id=str(guest_id),
+                    room=str(room_chat)
+                ).exists()
+                return user_exists
+
+            elif status_chat == "new_chat":
+                room_exists = UserData.objects.filter(room=str(room_chat)).exists()
+                return not room_exists
+
+        except Exception as e:
+            logger.error(f"Error in check_access: {e}", exc_info=True)
+            return False
+
+    async def connect(self):
+        await self.accept()
+        logger.info(f"Auth connection accepted: {self.channel_name}")
+
+    async def disconnect(self, close_code):
+        logger.info(f"Auth connection closed: {self.channel_name}, code: {close_code}")
+
+    async def receive(self, text_data):
+        try:
+            data = json.loads(text_data)
+
+            room_chat = data.get("room")
+            id_user = data.get("user_id")
+            guest_id = data.get("guest_id")
+            status_chat = data.get("status_chat")
+            token = data.get("token")
+
+            if not all([room_chat, token, status_chat]):
+                logger.warning("Missing required fields in auth data")
+                await self.close(code=4001)
+                return
+
+            if status_chat == "new_chat":
+                has_access = await self.check_access(
+                    id_user=None,
+                    guest_id=None,
+                    room_chat=room_chat,
+                    status_chat="new_chat"
+                )
+
+                if not has_access:
+                    logger.warning(f"Room already exists: {room_chat}")
+                    await self.close(code=4001)
+                    return
+
+                await redis_client.setex(
+                    f"session:new_chat:{token}",
+                    300,
+                    json.dumps({
+                        "room": room_chat,
+                        "user_id": id_user,
+                        "guest_id": guest_id,
+                        "token": token
+                    })
+                )
+                logger.info(f"New chat session created: {token}")
+
+            elif status_chat == "existing_chat":
+                has_access = await self.check_access(
+                    id_user=id_user,
+                    guest_id=guest_id,
+                    room_chat=room_chat,
+                    status_chat="existing_chat"
+                )
+
+                if not has_access:
+                    logger.warning(f"Access denied for user {id_user} to room {room_chat}")
+                    await self.close(code=4001)
+                    return
+
+                await redis_client.setex(
+                    f"session:existing_chat:{token}",
+                    300,
+                    json.dumps({
+                        "room": room_chat,
+                        "user_id": id_user,
+                        "guest_id": guest_id,
+                        "token": token
+                    })
+                )
+                logger.info(f"Existing chat session created: {token}")
+
+            await self.send(json.dumps({
+                "action": "connect_to_chat",
+                "status": "success"
+            }))
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON in auth data: {e}", exc_info=True)
+            await self.close(code=4001)
+        except Exception as e:
+            logger.error(f"Error in auth receive: {e}", exc_info=True)
+            await self.close(code=4001)
+        finally:
+            await self.close()
+
+
+class ChatConsumer(BaseChatConsumer):
+    async def connect(self):
+        token_session = self.scope["url_route"]["kwargs"]["room_name"]
+
+        session_data = await self.validate_token_and_get_session(token_session, "existing_chat")
+
+        if session_data is None:
+            logger.warning(f"Invalid session for existing chat: {token_session}")
+            await self.close(code=4002)
+            return
+
+        self.room_name = session_data["room"]
+        self.user_id = session_data["user_id"]
+        self.guest_id = session_data["guest_id"]
+        self.room_group_name = f"chat_{self.room_name}"
+
+        # Добавляем в группу чата
+        await self.channel_layer.group_add(self.room_group_name, self.channel_name)
+        
+        # Отмечаем в Redis что пользователь в этой комнате
+        await redis_client.sadd(f"user_rooms:{self.user_id}", self.room_name)
+        
+        await self.accept()
+
+        logger.info(f"User {self.user_id} connected to existing chat {self.room_name}")
+
+    async def disconnect(self, close_code):
+        if hasattr(self, 'room_group_name'):
+            # Удаляем из Redis информацию что пользователь в комнате
+            await redis_client.srem(f"user_rooms:{self.user_id}", self.room_name)
+            
+            await self.channel_layer.group_discard(self.room_group_name, self.channel_name)
+            logger.info(f"User {self.user_id} disconnected from chat {self.room_name}")
+
+    async def receive(self, text_data=None, bytes_data=None):
+        if text_data:
+            try:
+                data = json.loads(text_data)
+                message = data.get("message", "").strip()
+                if not message:
+                    logger.warning("Empty message received, ignoring")
+                    return
+
+                # Проверяем и сохраняем если нужно (online но не в комнате / offline)
+                await self.save_offline_message(
+                    sender_id=self.user_id,
+                    receiver_id=self.guest_id,
+                    room=self.room_name,
+                    message_text=message,
+                    chat_status="existing_chat"
+                )
+
+                # Рассылка сообщения в комнату чата
+                await self.channel_layer.group_send(
+                    self.room_group_name,
+                    {
+                        "type": "chat.message",
+                        "message": message,
+                        "sender_id": self.user_id
+                    }
+                )
+            except json.JSONDecodeError as e:
+                logger.error(f"Invalid JSON in text message: {e}", exc_info=True)
+            except Exception as e:
+                logger.error(f"Error handling text message: {e}", exc_info=True)
+
+        elif bytes_data:
+            await self.handle_binary_data(bytes_data)
+
+
+class NewChatConsumer(BaseChatConsumer):
+    @sync_to_async
+    def add_chat(self, user_id, guest_id, room_id):
+        try:
+            exact_exists = UserData.objects.filter(
+                user_id=str(user_id),
+                guest_id=str(guest_id),
+                room=str(room_id)
+            ).exists()
+
+            if not exact_exists:
+                UserData.objects.create(
+                    user_id=str(user_id),
+                    guest_id=str(guest_id),
+                    room=str(room_id),
+                    count=2,
+                    groups="default"
+                )
+                logger.info(f"Chat record created: {user_id} <-> {guest_id} in room {room_id}")
+            else:
+                logger.info(f"Duplicate blocked: record {user_id}->{guest_id} in room {room_id} already exists")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Error adding chat connection: {e}", exc_info=True)
+            return False
+
+    async def connect(self):
+        token_session = self.scope["url_route"]["kwargs"]["room_name"]
+
+        session_data = await self.validate_token_and_get_session(token_session, "new_chat")
+
+        if session_data is None:
+            logger.warning(f"Invalid session for new chat: {token_session}")
+            await self.close(code=4002)
+            return
+
+        self.room_name = session_data["room"]
+        self.user_id = session_data["user_id"]
+        self.guest_id = session_data["guest_id"]
+        self.room_group_name = f"chat_{self.room_name}"
+
+        # Создаём записи в БД для обоих пользователей
+        await self.add_chat(self.user_id, self.guest_id, self.room_name)
+        await self.add_chat(self.guest_id, self.user_id, self.room_name)
+
+        # Добавляем в группу чата
+        await self.channel_layer.group_add(self.room_group_name, self.channel_name)
+        
+        # Отмечаем в Redis что пользователь в этой комнате
+        await redis_client.sadd(f"user_rooms:{self.user_id}", self.room_name)
+        
+        await self.accept()
+
+        logger.info(f"User {self.user_id} created new chat {self.room_name} with {self.guest_id}")
+
+    async def disconnect(self, close_code):
+        if hasattr(self, 'room_group_name'):
+            # Удаляем из Redis информацию что пользователь в комнате
+            await redis_client.srem(f"user_rooms:{self.user_id}", self.room_name)
+            
+            await self.channel_layer.group_discard(self.room_group_name, self.channel_name)
+            logger.info(f"User {self.user_id} disconnected from new chat {self.room_name}")
+
+    async def receive(self, text_data=None, bytes_data=None):
+        if text_data:
+            try:
+                data = json.loads(text_data)
+                message = data.get("message", "").strip()
+                if not message:
+                    logger.warning("Empty message received, ignoring")
+                    return
+
+                # Проверяем и сохраняем если нужно (online но не в комнате / offline)
+                await self.save_offline_message(
+                    sender_id=self.user_id,
+                    receiver_id=self.guest_id,
+                    room=self.room_name,
+                    message_text=message,
+                    chat_status="new_chat"
+                )
+
+                # Рассылка сообщения в комнату чата
+                await self.channel_layer.group_send(
+                    self.room_group_name,
+                    {
+                        "type": "chat.message",
+                        "message": message,
+                        "sender_id": self.user_id
+                    }
+                )
+            except json.JSONDecodeError as e:
+                logger.error(f"Invalid JSON in text message: {e}", exc_info=True)
+            except Exception as e:
+                logger.error(f"Error handling text message: {e}", exc_info=True)
+
+        elif bytes_data:
+            await self.handle_binary_data(bytes_data)
+
+
+class NotificationConsumer(AsyncWebsocketConsumer):
+    @sync_to_async
+    def set_user_online(self, user_id):
+        """Устанавливает статус пользователя 'online'"""
+        try:
+            user = Models.objects.get(id=user_id)
+            user.user_state_offline_online = 'online'
+            user.save()
+            logger.info(f"User {user_id} set to ONLINE")
+            return True
+        except Models.DoesNotExist:
+            logger.warning(f"User {user_id} not found in Models")
+            return False
+        except Exception as e:
+            logger.error(f"Error setting user online: {e}")
+            return False
+
+    @sync_to_async
+    def set_user_offline(self, user_id):
+        """Устанавливает статус пользователя 'offline'"""
+        try:
+            user = Models.objects.get(id=user_id)
+            user.user_state_offline_online = 'offline'
+            user.save()
+            logger.info(f"User {user_id} set to OFFLINE")
+            return True
+        except Models.DoesNotExist:
+            logger.warning(f"User {user_id} not found in Models")
+            return False
+        except Exception as e:
+            logger.error(f"Error setting user offline: {e}")
+            return False
+
+    async def connect(self):
+        await self.accept()
+        self.user_id = None
+        self.user_group_name = None
+        logger.info(f"Notification connection accepted: {self.channel_name}")
+
+    async def disconnect(self, close_code):
+        # При отключении ставим статус offline
+        if self.user_id:
+            await self.set_user_offline(self.user_id)
+            # Убираем из группы уведомлений
+            if self.user_group_name:
+                await self.channel_layer.group_discard(
+                    self.user_group_name, 
+                    self.channel_name
+                )
+        logger.info(f"Notification disconnected: {self.channel_name}, code: {close_code}")
+
+    async def receive(self, text_data):
+        try:
+            data = json.loads(text_data)
+            user_id = data.get("user_id")
+            
+            if not user_id:
+                logger.warning("No user_id provided in notification connect")
+                await self.close(code=4003)
+                return
+            
+            # Устанавливаем статус online
+            success = await self.set_user_online(user_id)
+            if not success:
+                await self.send(json.dumps({
+                    "type": "error",
+                    "message": "User not found"
+                }))
+                await self.close(code=4003)
+                return
+            
+            self.user_id = user_id
+            self.user_group_name = f"user_{user_id}"
+            
+            # Добавляем в персональную группу уведомлений
+            await self.channel_layer.group_add(
+                self.user_group_name,
+                self.channel_name
+            )
+            
+            logger.info(f"User {user_id} registered for notifications in group {self.user_group_name}")
+            
+            # Подтверждаем подключение
+            await self.send(json.dumps({
+                "type": "connected",
+                "status": "online",
+                "user_id": user_id
+            }))
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON in notification data: {e}")
+            await self.close(code=4003)
+        except Exception as e:
+            logger.error(f"Error in notification receive: {e}")
+            await self.close(code=4003)
+
+    async def new_message_notification(self, event):
+        """Отправляет уведомление о новом сообщении клиенту"""
+        await self.send(text_data=json.dumps({
+            "type": "new_message",
+            "room": event.get("room"),
+            "sender_id": event.get("sender_id"),
+            "message": event.get("message"),
+            "status_chat": event.get("status_chat")
+        }, ensure_ascii=False))
+    
+    async def status_changed(self, event):
+        """Уведомляет об изменении статуса собеседника"""
+        await self.send(text_data=json.dumps({
+            "type": "status_changed",
+            "user_id": event.get("user_id"),
+            "status": event.get("status")
+        }, ensure_ascii=False))
+
+
+
+
+
+
+//routing.py
+from django.urls import re_path
+from . import consumers
+
+websocket_urlpatterns = [
+    re_path("ws/data/", consumers.DataConsumer.as_asgi()),
+    #re_path("ws/my_chat/", consumers.YourConsumer.as_asgi()),
+    re_path(r"ws/chat_user/(?P<room_name>\w+)/$", consumers.ChatConsumer.as_asgi()),
+    re_path(r"ws/new_chat_user/(?P<room_name>\w+)/$", consumers.NewChatConsumer.as_asgi()),
+    #re_path(r"ws/groop_user/(?P<room_name>\w+)/$", consumers.GroupChatConsumer.as_asgi()),
+    re_path("ws/notifications/", consumers.NotificationConsumer.as_asgi()),
+]
+
+
+
+
+
+//server/client
+//test.py
+import requests as rq
+import websocket
+import queue
+import json
+import threading
+
+
+'''json_login = {
+    "login":"User1",
+    "password":"12345678"
+}
+response_login = rq.post("http://127.0.0.1:5000/api/v2/user/login/", json=json_login)
+data = response_login.json()
+print(data)
+
+json_reqistartion = {
+    "login":"User2",
+    "email":"user2@mail.ru",
+    "number":"9999999992",
+    "password":"12345678"
+}
+response = rq.post("http://127.0.0.1:5000/api/v2/user/registration/", json=json_reqistartion)
+print(response)
+
+sesion = {
+    "id_users": 2,
+    "token": "opjejcaggmlhjhkadodpfpkiihbbgbcogdgncmilfnpadnampoefaokkbpibjgni7Z&>$~IvI-O+t%'gz#<pFfSH?ICZ`*E1XOkT"
+}
+
+response = rq.post("http://127.0.0.1:5000/notification/v2/user/notification/", json=sesion)
+
+try:
+    data = response.json()
+    print("JSON response:", json.dumps(data, indent=2, ensure_ascii=False))
+except:
+    print("Response is not JSON")'''
+
+
+# 1. Аутентификация
+ws_auth = websocket.WebSocket()
+ws_auth.connect("ws://127.0.0.1:5000/ws/data/")
+ws_auth.send(json.dumps({
+    "room": "lobbi1",
+    "user_id": 1,
+    "guest_id": 2,
+    "status_chat": "existing_chat",
+    "token": "api87"
+}))#existing_chat
+
+
+# Создаем очередь для сообщений
+message_queue = queue.Queue()
+ws_auth.close()
+
+# 2. Подключаемся к чату
+ws = websocket.WebSocket()
+ws.connect("ws://127.0.0.1:5000/ws/chat_user/api87/")
+
+def receive_messages():
+    while True:
+        try:
+            message = ws.recv()
+            print(f"\nReceived: {message}")
+            # КЛАДЕМ сообщение в очередь вместо прямого вывода
+            message_queue.put(message)
+        except Exception as e:
+            print(f"\nDisconnected: {e}")
+            break
+
+# Запускаем поток для прослушивания
+thread = threading.Thread(target=receive_messages, daemon=True)
+thread.start()
+
+# 3. Основной цикл обработки
+while True:
+    try:
+        received_msg = message_queue.get_nowait()
+        received_msg_dict = json.loads(received_msg)
+    except queue.Empty:
+        pass
+    message = input()
+    ws.send(json.dumps({"message": message}))
+
+
+
+#ws.close()'''
+
+
+
+
+//user_client.py
+# simple_client.py
+import asyncio
+import websockets
+import json
+import requests
+
+x = '".rSSm9.v$d$kZ6f'
+
+# ===== НАСТРОЙКИ (МЕНЯЙ ТОЛЬКО ЗДЕСЬ) =====
+USER_ID = 2                          # Твой ID
+TOKEN = f"llifbkdogcoggjeefpjleplhmbjfcgninamakplhdklnhfijkobmofheaghagded4|%4q_*_wJ4wG'L`>;X9{x}"                 # Твой токен из sign_up_models
+ROOM_CHAT = "lobbi1"                # Комната чата
+GUEST_ID = 1                         # ID собеседника
+STATUS_CHAT = "existing_chat"        # "new_chat" или "existing_chat"
+NOTIFICATION_ROOM = "ciwYBfMXR3qLTicFMkbUQoySuS1XXE2aIJAImWEM0I2ZwYch0WqXDZpRBzKMPLjUeV2MREPYaT0x7c3UxDaIUW88jDZut48TxrMJRcL9LKDKUw"   # Твоя личная комната для уведомлений
+
+# ===== URL (НЕ ТРОГАЙ) =====
+HOST = "ws://127.0.0.1:5000"
+WS_NOTIF = f"{HOST}/ws/notifications/"
+WS_DATA = f"{HOST}/ws/data/"
+API_OFFLINE = "http://127.0.0.1:5000/notification/v2/user/notification/"
+
+CHAT_TOKEN = f"token_{USER_ID}_{ROOM_CHAT}"
+
+if STATUS_CHAT == "new_chat":
+    WS_CHAT = f"{HOST}/ws/new_chat_user/{CHAT_TOKEN}/"
+else:
+    WS_CHAT = f"{HOST}/ws/chat_user/{CHAT_TOKEN}/"
+
+
+class ChatClient:
+    def __init__(self):
+        self.ws_notif = None
+        self.ws_chat = None
+        self.in_chat = False
+        self.running = True
+        
+    async def connect_notifications(self):
+        """Подключаем уведомления и слушаем их вечно"""
+        try:
+            self.ws_notif = await websockets.connect(WS_NOTIF)
+            await self.ws_notif.send(json.dumps({
+                "user_id": USER_ID,
+                "room": NOTIFICATION_ROOM
+            }))
+            response = await self.ws_notif.recv()
+            print(f"[УВЕДОМЛЕНИЯ] Подключены: {response}")
+            
+            # Слушаем уведомления в фоне
+            asyncio.create_task(self.listen_notifications())
+        except Exception as e:
+            print(f"[ОШИБКА] Уведомления: {e}")
+    
+    async def listen_notifications(self):
+        """Слушает входящие уведомления"""
+        try:
+            async for msg in self.ws_notif:
+                data = json.loads(msg)
+                if data.get("type") == "new_message":
+                    print("\n" + '"' * 40)
+                    print(f'  Новая сообшение: User {data["sender_id"]}')
+                    print(f'  Комната: {data["room"]}')
+                    print(f'  Сообщение: {data["message"]}')
+                    print('"' * 40)
+                    print(">>> ", end="", flush=True)
+        except:
+            pass
+    
+    async def connect_chat(self):
+        """Подключаемся к чату"""
+        # Авторизация
+        async with websockets.connect(WS_DATA) as ws_data:
+            await ws_data.send(json.dumps({
+                "room": ROOM_CHAT,
+                "user_id": USER_ID,
+                "guest_id": GUEST_ID,
+                "status_chat": STATUS_CHAT,
+                "token": CHAT_TOKEN
+            }))
+            auth_resp = await ws_data.recv()
+        
+        # Подключаемся к чату
+        self.ws_chat = await websockets.connect(WS_CHAT)
+        self.in_chat = True
+        print(f"[ЧАТ] Подключен к {ROOM_CHAT}")
+        
+        # Слушаем сообщения чата
+        asyncio.create_task(self.listen_chat())
+    
+    async def listen_chat(self):
+        """Слушает сообщения из чата"""
+        try:
+            async for msg in self.ws_chat:
+                data = json.loads(msg)
+                if data.get("type") == "message":
+                    print("\n" + '"' * 40)
+                    print(f'  Новая сообшение: User {data["sender_id"]}')
+                    print(f'  Сообщение: {data["message"]}')
+                    print('"' * 40)
+                    print(">>> ", end="", flush=True)
+        except:
+            self.in_chat = False
+            print("\n[ЧАТ] Отключен")
+    
+    async def disconnect_chat(self):
+        """Отключаемся от чата"""
+        if self.ws_chat:
+            await self.ws_chat.close()
+            self.ws_chat = None
+            self.in_chat = False
+            print("[ЧАТ] Вышел из чата")
+    
+    async def send_message(self, text):
+        """Отправляет сообщение"""
+        if self.in_chat and self.ws_chat:
+            await self.ws_chat.send(json.dumps({"message": text}))
+        else:
+            print("[ОШИБКА] Не в чате!")
+    
+    async def check_offline(self):
+        """Проверяет офлайн-сообщения"""
+        try:
+            r = requests.post(API_OFFLINE, json={
+                "id_users": USER_ID,
+                "token": TOKEN
+            })
+            data = r.json()
+            if isinstance(data, list):
+                print(f"\n📬 [ОФЛАЙН] Получено {len(data)} сообщений:")
+                for msg in data:
+                    print('"' * 40)
+                    print(f'  Новая сообшение: User {msg["id_senders"]}')
+                    print(f'  Комната: {msg["room"]}')
+                    print(f'  Сообщение: {msg["message"]}')
+                    print('"' * 40)
+            elif isinstance(data, dict) and data.get("message") == "no message":
+                print("\n📭 [ОФЛАЙН] Нет сообщений")
+        except Exception as e:
+            print(f"\n[ОШИБКА] {e}")
+    
+    async def close(self):
+        """Закрывает всё"""
+        self.running = False
+        if self.ws_chat:
+            await self.ws_chat.close()
+        if self.ws_notif:
+            await self.ws_notif.close()
+
+
+async def main():
+    client = ChatClient()
+    
+    print("=" * 50)
+    print(f"  ЧАТ-КЛИЕНТ | User {USER_ID}")
+    print(f"  Чат: {ROOM_CHAT} | Собеседник: User {GUEST_ID}")
+    print("=" * 50)
+    
+    # Подключаем уведомления
+    await client.connect_notifications()
+    
+    # Проверяем офлайн
+    await client.check_offline()
+    
+    print("\nКоманды:")
+    print("  chat   - войти в чат")
+    print("  leave  - выйти из чата")
+    print("  check  - проверить офлайн-сообщения")
+    print("  exit   - выход")
+    print("  (любой текст отправляется в чат)\n")
+    
+    while client.running:
+        text = await asyncio.get_event_loop().run_in_executor(None, input, ">>> ")
+        text = text.strip()
+        
+        if text == "exit":
+            await client.close()
+            break
+        elif text == "chat":
+            if client.in_chat:
+                print("[ОШИБКА] Ты уже в чате!")
+            else:
+                await client.connect_chat()
+        elif text == "leave":
+            if client.in_chat:
+                await client.disconnect_chat()
+            else:
+                print("[ОШИБКА] Ты не в чате!")
+        elif text == "check":
+            await client.check_offline()
+        elif text:
+            if client.in_chat:
+                await client.send_message(text)
+            else:
+                print("[ОШИБКА] Сначала войди в чат (команда chat)")
+
+asyncio.run(main())

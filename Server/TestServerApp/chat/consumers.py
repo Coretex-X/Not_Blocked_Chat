@@ -1,6 +1,5 @@
-# consumers.py
 from channels.generic.websocket import AsyncWebsocketConsumer
-from .models import UserData, UserOff, UserNotification
+from .models import UserData, UserOff
 from datetime import datetime
 import json
 import base64
@@ -509,19 +508,6 @@ class NotificationConsumer(AsyncWebsocketConsumer):
             logger.error(f"Error setting user offline: {e}")
             return False
 
-    @sync_to_async
-    def check_room_access(self, user_id, room):
-        """Проверяет, есть ли у пользователя доступ к комнате"""
-        try:
-            has_access = UserNotification.objects.filter(
-                user_id=str(user_id),
-                room=str(room)
-            ).exists()
-            return has_access
-        except Exception as e:
-            logger.error(f"Error checking room access: {e}")
-            return False
-
     async def connect(self):
         await self.accept()
         self.user_id = None
@@ -544,25 +530,9 @@ class NotificationConsumer(AsyncWebsocketConsumer):
         try:
             data = json.loads(text_data)
             user_id = data.get("user_id")
-            room = data.get("room")
             
-            if not user_id or not room:
-                logger.warning("Missing user_id or room in notification connect")
-                await self.send(json.dumps({
-                    "type": "error",
-                    "message": "Missing user_id or room"
-                }))
-                await self.close(code=4003)
-                return
-            
-            # Проверяем доступ к комнате
-            has_access = await self.check_room_access(user_id, room)
-            if not has_access:
-                logger.warning(f"User {user_id} has no access to room {room}")
-                await self.send(json.dumps({
-                    "type": "error",
-                    "message": "Access denied to this room"
-                }))
+            if not user_id:
+                logger.warning("No user_id provided in notification connect")
                 await self.close(code=4003)
                 return
             
@@ -585,14 +555,13 @@ class NotificationConsumer(AsyncWebsocketConsumer):
                 self.channel_name
             )
             
-            logger.info(f"User {user_id} registered for notifications, room {room} access verified")
+            logger.info(f"User {user_id} registered for notifications in group {self.user_group_name}")
             
             # Подтверждаем подключение
             await self.send(json.dumps({
                 "type": "connected",
                 "status": "online",
-                "user_id": user_id,
-                "room": room
+                "user_id": user_id
             }))
             
         except json.JSONDecodeError as e:
@@ -619,7 +588,6 @@ class NotificationConsumer(AsyncWebsocketConsumer):
             "user_id": event.get("user_id"),
             "status": event.get("status")
         }, ensure_ascii=False))
-
 
 
 

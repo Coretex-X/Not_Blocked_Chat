@@ -5,7 +5,7 @@ import json
 import threading
 
 
-json_login = {
+'''json_login = {
     "login":"User1",
     "password":"12345678"
 }
@@ -13,16 +13,16 @@ response_login = rq.post("http://127.0.0.1:5000/api/v2/user/login/", json=json_l
 data = response_login.json()
 print(data)
 
-'''json_reqistartion = {
+json_reqistartion = {
     "login":"User2",
     "email":"user2@mail.ru",
     "number":"9999999992",
     "password":"12345678"
 }
 response = rq.post("http://127.0.0.1:5000/api/v2/user/registration/", json=json_reqistartion)
-print(response)'''
+print(response)
 
-'''sesion = {
+sesion = {
     "id_users": 2,
     "token": "opjejcaggmlhjhkadodpfpkiihbbgbcogdgncmilfnpadnampoefaokkbpibjgni7Z&>$~IvI-O+t%'gz#<pFfSH?ICZ`*E1XOkT"
 }
@@ -33,17 +33,17 @@ try:
     data = response.json()
     print("JSON response:", json.dumps(data, indent=2, ensure_ascii=False))
 except:
-    print("Response is not JSON")
+    print("Response is not JSON")'''
 
 
 # 1. Аутентификация
 ws_auth = websocket.WebSocket()
 ws_auth.connect("ws://127.0.0.1:5000/ws/data/")
 ws_auth.send(json.dumps({
-    "room": "lobbi",
-    "user_id": 1,
+    "room": "lobbi4",
+    "user_id": 4,
     "guest_id": 2,
-    "status_chat": "existing_chat",
+    "status_chat": "new_chat",
     "token": "api87"
 }))#existing_chat
 
@@ -54,7 +54,7 @@ ws_auth.close()
 
 # 2. Подключаемся к чату
 ws = websocket.WebSocket()
-ws.connect("ws://127.0.0.1:5000/ws/chat_user/api87/")
+ws.connect("ws://127.0.0.1:5000/ws/new_chat_user/api87/")
 
 def receive_messages():
     while True:

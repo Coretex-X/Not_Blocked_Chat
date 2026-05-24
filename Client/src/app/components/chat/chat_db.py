@@ -122,3 +122,73 @@ def delete_messages_for_chat(chat_id: int):
             (chat_id,)
         )
         con.commit()
+
+
+def delete_single_message(msg_db_id: int):
+    """Удаляет одно сообщение и обновляет last_message чата."""
+    with sql.connect(_db_path) as con:
+        cur = con.cursor()
+        # Узнаём chat_id удаляемого сообщения
+        cur.execute("SELECT chat_id FROM messages WHERE id = ?", (msg_db_id,))
+        row = cur.fetchone()
+        chat_id = row[0] if row else None
+
+        cur.execute("DELETE FROM messages WHERE id = ?", (msg_db_id,))
+        con.commit()
+
+        # Обновляем last_message: берём последнее оставшееся сообщение
+        if chat_id:
+            cur.execute("""
+                SELECT content, file_name, timestamp FROM messages
+                WHERE chat_id = ?
+                ORDER BY id DESC LIMIT 1
+            """, (chat_id,))
+            last = cur.fetchone()
+            if last:
+                preview = last[0] if last[0] else (last[1] or "Медиафайл")
+                if len(preview) > 80:
+                    preview = preview[:77] + "..."
+                cur.execute(
+                    "UPDATE chats SET last_message = ?, last_message_time = ? WHERE chat_id = ?",
+                    (preview, last[2], chat_id)
+                )
+            else:
+                cur.execute(
+                    "UPDATE chats SET last_message = NULL, last_message_time = NULL WHERE chat_id = ?",
+                    (chat_id,)
+                )
+            con.commit()
+
+
+def update_message_content(msg_db_id: int, new_content: str):
+    """Обновляет текст сообщения и last_message чата если это последнее сообщение."""
+    with sql.connect(_db_path) as con:
+        cur = con.cursor()
+        # Узнаём chat_id сообщения
+        cur.execute("SELECT chat_id FROM messages WHERE id = ?", (msg_db_id,))
+        row = cur.fetchone()
+        chat_id = row[0] if row else None
+
+        cur.execute(
+            "UPDATE messages SET content = ? WHERE id = ?",
+            (new_content, msg_db_id)
+        )
+        con.commit()
+
+        # Если это последнее сообщение чата — обновляем превью
+        if chat_id:
+            cur.execute("""
+                SELECT id FROM messages
+                WHERE chat_id = ?
+                ORDER BY id DESC LIMIT 1
+            """, (chat_id,))
+            last_row = cur.fetchone()
+            if last_row and last_row[0] == msg_db_id:
+                preview = new_content if new_content else "Медиафайл"
+                if len(preview) > 80:
+                    preview = preview[:77] + "..."
+                cur.execute(
+                    "UPDATE chats SET last_message = ? WHERE chat_id = ?",
+                    (preview, chat_id)
+                )
+                con.commit()

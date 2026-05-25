@@ -10,14 +10,14 @@ def init_database(db_path: str):
         cur.execute("""
             CREATE TABLE IF NOT EXISTS users_data(
                 id_user INTEGER, name TEXT, profile TEXT,
-                number TEXT, token TEXT, avatar TEXT)
+                number TEXT, token TEXT, room TEXT, avatar TEXT)
         """)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS contacts(
                 user_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT, username_save TEXT, status TEXT,
                 phone TEXT, status_user_contact TEXT,
-                redacted_username TEXT, avatar TEXT)
+                redacted_username TEXT, room TEXT, avatar TEXT)
         """)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS chats(

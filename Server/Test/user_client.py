@@ -233,11 +233,11 @@ import threading
 import queue
 
 # ===== НАСТРОЙКИ =====
-USER_ID = 1
-NOTIFICATION_ROOM = "XVrYLQc7gdiSX4IVmSPlPGr2XU7WntzWA25gxqjMyFwVQWhtquLhItcWR9C94D8ylRjJBJH21GTDzPPN1dzhABq7Q94j8sf95HNzUf7qgleI0t"
-ROOM_CHAT = "lobbi1"
-GUEST_ID = 2
-STATUS_CHAT = "existing_chat"
+USER_ID = 2
+NOTIFICATION_ROOM = "BawuMuGi2rkL2GLiO49iB7F6RPuQFWiKeWSFwTNKvNfgWGxsnWLQFN1I27pChEENcuhz2TRYNbkrpXztGJdPPXE8vaRNcbevwMcbB2X9jKZFA3"
+ROOM_CHAT = "lobbi2"
+GUEST_ID = 3
+STATUS_CHAT = "new_chat"
 CHAT_TOKEN = "api87"
 
 WS_HOST = "ws://127.0.0.1:5000"

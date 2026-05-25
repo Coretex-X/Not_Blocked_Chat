@@ -61,6 +61,7 @@ def main_sign_up(page: ft.Page):
             number = json_response["number"]
             token = json_response["token"]
             profil = json_response["profil"]
+            room = json_response["room"]
             authorization = "true"
             
             with ql.connect(db_path) as con:
@@ -68,8 +69,8 @@ def main_sign_up(page: ft.Page):
                 cur.execute("DELETE FROM user_settings")
                 cur.execute("DELETE FROM users_data")
                 cur.execute(
-                    "INSERT INTO users_data (id_user, name, profile, number, token) VALUES (?, ?, ?, ?, ?)",
-                    (id_user, name, profil, number, token)
+                    "INSERT INTO users_data (id_user, name, profile, number, token, room) VALUES (?, ?, ?, ?, ?, ?)",
+                    (id_user, name, profil, number, token, room)
                 )
                 cur.execute(
                     "INSERT INTO user_settings (authorization) VALUES (?)",

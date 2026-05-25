@@ -4,19 +4,17 @@ from rest_framework import status
 from rest_framework.exceptions import AuthenticationFailed
 from sign_up.models import Models
 from chat.models import UserOff
-from .serializer import *
 import logging
 
 logger = logging.getLogger(__name__)
-  
-class UserNotification(APIView):
-    serializer_class = Serializer
 
+
+class UserNotification(APIView):
     def post(self, request):
         response_id = request.data.get('id_users')
         response_token = request.data.get('token')
 
-        # Поиск пользователя по его id
+        # Поиск пользователя
         try:
             user = Models.objects.get(pk=response_id)
         except Models.DoesNotExist:
@@ -25,39 +23,31 @@ class UserNotification(APIView):
                 'status': status.HTTP_401_UNAUTHORIZED
             })
 
-        # Проверяем токен
+        # Проверка токена
         if user.token != response_token:
             raise AuthenticationFailed({
                 'meaning': 'Неверный токен',
                 'status': status.HTTP_401_UNAUTHORIZED
             })
-        
-        # Ищем все офлайн-сообщения для этого пользователя
+
+        # Ищем офлайн-сообщения
         offline_messages = UserOff.objects.filter(message_recipient_ID=str(response_id))
-        
-        # Если сообщений нет
+
         if not offline_messages.exists():
-            return Response({
-                "message": "no message"
-            })
-        
-        # Формируем список сообщений для ответа
+            return Response({"message": "no message"})
+
         messages_list = []
         for msg in offline_messages:
             messages_list.append({
                 "id_senders": msg.user_id,
                 "room": msg.room,
                 "message": msg.message,
-                "status_chat": msg.status_chat
+                "status_chat": msg.status_chat,
+                "timestamp": str(msg.timestamp) if hasattr(msg, 'timestamp') else ""
             })
-        
-        # Удаляем все найденные записи из БД
+
         offline_messages.delete()
-        
-        logger.info(f"Returned {len(messages_list)} offline messages to user {response_id}")
-        
-        # Возвращаем найденные сообщения
-        return Response(messages_list, status=status.HTTP_200_OK)
+        return Response(messages_list)
     
 
 

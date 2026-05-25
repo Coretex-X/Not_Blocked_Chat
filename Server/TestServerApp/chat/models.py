@@ -113,6 +113,7 @@ class UserOff(models.Model):
     room = models.TextField()
     message = models.TextField()
     status_chat = models.TextField()
+    timestamp = models.DateTimeField(auto_now_add=True)  # ← ДОБАВИТЬ
 
 
 class UserNotification(models.Model):

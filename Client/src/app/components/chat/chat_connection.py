@@ -29,44 +29,50 @@ db_path = f"{path.db_path()}user_data.db"
 message_queue: queue.Queue = queue.Queue()
 ws: websocket.WebSocket | None = None
 running = True
-LOBBI_TIME = None  # Сюда запишем комнату из БД
+LOBBI_TIME = None
 
 
 # ── Вспомогательные функции БД ────────────────────────────────────────────────
 
 def get_room_by_contact(contact_id: str) -> str | None:
-    """Ищет комнату по contact_id в таблице contacts (users_data)"""
+    """Ищет комнату по contact_id в таблице contacts"""
     try:
         with ql.connect(db_path) as con:
             cur = con.cursor()
-            cur.execute("SELECT room FROM users_data WHERE id_user = ?", (contact_id,))
+            cur.execute("SELECT room FROM contacts WHERE user_id = ?", (str(contact_id),))
             row = cur.fetchone()
             if row and row[0]:
                 return row[0]
         return None
     except Exception as e:
-        print(f"Ошибка чтения комнаты: {e}")
+        print(f"[БД] Ошибка чтения комнаты: {e}")
         return None
 
 
 def save_room_for_contact(my_id: str, contact_id: str, room: str):
-    """Сохраняет комнату для нового чата в таблицу users_data"""
+    """Сохраняет или создаёт запись с комнатой в contacts для обоих пользователей"""
     try:
         with ql.connect(db_path) as con:
             cur = con.cursor()
-            # Сохраняем себе
-            cur.execute(
-                "INSERT INTO users_data (id_user, room) VALUES (?, ?) ON CONFLICT(id_user) DO UPDATE SET room = ?",
-                (my_id, room, room)
-            )
-            # Сохраняем контакту (если его запись есть)
-            cur.execute(
-                "INSERT INTO users_data (id_user, room) VALUES (?, ?) ON CONFLICT(id_user) DO UPDATE SET room = ?",
-                (contact_id, room, room)
-            )
+            
+            for uid in (str(my_id), str(contact_id)):
+                cur.execute("SELECT user_id FROM contacts WHERE user_id = ?", (uid,))
+                if cur.fetchone():
+                    # Запись есть - обновляем комнату
+                    cur.execute("UPDATE contacts SET room = ? WHERE user_id = ?", (room, uid))
+                    print(f"[БД] Обновлена комната для user_id={uid}")
+                else:
+                    # Записи нет - создаём с комнатой
+                    cur.execute(
+                        "INSERT INTO contacts (user_id, room, status_user_contact) VALUES (?, ?, 'not_save_user')",
+                        (uid, room)
+                    )
+                    print(f"[БД] Создана запись для user_id={uid} с комнатой {room}")
+            
             con.commit()
+            print(f"[БД] Комната {room} сохранена")
     except Exception as e:
-        print(f"Ошибка сохранения комнаты: {e}")
+        print(f"[БД] Ошибка сохранения комнаты: {e}")
 
 
 # ── Публичный API ─────────────────────────────────────────────────────────────
@@ -78,11 +84,10 @@ def start_connection(my_id: str, contact_id: str, status_chat: str):
     print(f"[ЧАТ] my_id={my_id}, contact_id={contact_id}, status_chat={status_chat}")
     
     try:
-        # Определяем комнату
         if status_chat == 'existing_chat':
             LOBBI_TIME = get_room_by_contact(contact_id)
             if not LOBBI_TIME:
-                print("❌ Комната не найдена для контакта")
+                print("[ЧАТ] ❌ Комната не найдена для контакта")
                 return
             print(f"[ЧАТ] Комната из БД: {LOBBI_TIME}")
         else:
@@ -95,9 +100,10 @@ def start_connection(my_id: str, contact_id: str, status_chat: str):
         ws = websocket.WebSocket()
         ws.connect(WS_URL_NEW_CHAT if status_chat == 'new_chat' else WS_URL_CHAT)
         threading.Thread(target=_receive_loop, daemon=True).start()
+        print(f"[ЧАТ] ✅ Подключен к {LOBBI_TIME}")
         
     except Exception as e:
-        print(f"❌ Ошибка подключения: {e}")
+        print(f"[ЧАТ] ❌ Ошибка подключения: {e}")
 
 
 def send_text(payload: dict):
@@ -125,13 +131,16 @@ def _authenticate(my_id: str, contact_id: str, status_chat: str):
             "status_chat": status_chat,
             "token":       token,
         }))
+        response = conn.recv()
+        print(f"[АВТОРИЗАЦИЯ] {response}")
         conn.close()
     except Exception as e:
-        print(f"❌ Ошибка аутентификации: {e}")
+        print(f"[АВТОРИЗАЦИЯ] ❌ Ошибка: {e}")
 
 
 def _receive_loop():
     global running
+    print("[ЧАТ] Слушаю входящие сообщения...")
     while running:
         try:
             raw = ws.recv()
@@ -152,9 +161,10 @@ def _receive_loop():
                     "sender_id": meta.get("sender_id"),
                 })
         except websocket.WebSocketConnectionClosedException:
+            print("[ЧАТ] Соединение закрыто")
             break
         except Exception as e:
-            print(f"❌ Ошибка получения: {e}")
+            print(f"[ЧАТ] ❌ Ошибка получения: {e}")
             break
 
 
@@ -166,3 +176,4 @@ def close():
             ws.close()
         except:
             pass
+    print("[ЧАТ] Соединение закрыто")

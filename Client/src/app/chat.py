@@ -14,6 +14,9 @@ def chat_view(page: ft.Page) -> ft.View:
     status     = get_status_chat()
     contact_id = get_contact_id_by_chat(db_path, chat_id)
     my_id      = db.get_current_user_id()
+    
+    print(f"[CHAT] my_id={my_id}, contact_id={contact_id}, status={status}, chat_id={chat_id}")
+    
     contact    = db.get_contact_data(contact_id) if contact_id else None
 
     if contact is None:
@@ -42,15 +45,18 @@ def chat_view(page: ft.Page) -> ft.View:
         "about":        "None",
     }
 
-    conn.start_connection(my_id, contact_id, status)
+    # Проверяем перед подключением
+    if my_id and contact_id and status:
+        print(f"[CHAT] Вызываю start_connection({my_id}, {contact_id}, {status})")
+        conn.start_connection(str(my_id), str(contact_id), status)
+    else:
+        print(f"[CHAT] ❌ Пропускаю подключение: my_id={my_id}, contact_id={contact_id}, status={status}")
 
-    # Передаём chat_id в ChatUI для сохранения/загрузки истории
     ui = ChatUI(page, current_user, contact_user, chat_id=chat_id)
 
     page.overlay.append(ui.file_picker)
     page.update()
 
-    # Колбэки для входящих сообщений (используются извне при необходимости)
     page.data = {
         "add_incoming_text": lambda text, sid=None: ui.add_message_to_chat(
             ui.create_text_message(text, is_user=(sid == my_id))),
@@ -72,8 +78,7 @@ def chat_view(page: ft.Page) -> ft.View:
             expand=True,
             content=ft.Column([
                 ui.chat_header,
-                ft.Container(content=ui.messages_column, expand=True,
-                             padding=10),
+                ft.Container(content=ui.messages_column, expand=True, padding=10),
                 ui.voice_panel,
                 ui.input_bar,
             ], expand=True),

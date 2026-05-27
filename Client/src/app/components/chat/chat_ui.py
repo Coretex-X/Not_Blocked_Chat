@@ -106,7 +106,7 @@ class ChatUI:
         self.page         = page
         self.CURRENT_USER = current_user
         self.CONTACT_USER = contact_user
-        self.chat_id      = chat_id  # ID текущего чата для сохранения истории
+        self.chat_id      = chat_id
 
         self.messages_column  = ft.Column(scroll=ft.ScrollMode.ALWAYS, expand=True)
         self.all_messages:     list = []
@@ -122,7 +122,6 @@ class ChatUI:
         self._menu_block_item_ref  = ft.Ref[ft.PopupMenuItem]()
         self._popup_btn_ref        = ft.Ref[ft.PopupMenuButton]()
 
-        # Инициализируем таблицу сообщений (на случай если её ещё нет)
         try:
             db_ops.init_messages_table()
         except Exception as ex:
@@ -134,7 +133,6 @@ class ChatUI:
         self._build_input_bar()
         self._build_header()
 
-        # Загружаем историю сообщений из БД
         self._load_history()
 
     # ── Настройки ─────────────────────────────────────────────────────────────
@@ -157,7 +155,6 @@ class ChatUI:
     # ── История сообщений ─────────────────────────────────────────────────────
 
     def _load_history(self):
-        """Загружает все сообщения чата из БД и отображает их."""
         if not self.chat_id:
             return
         try:
@@ -171,7 +168,6 @@ class ChatUI:
             print(f"❌ Ошибка загрузки истории: {ex}")
 
     def _restore_message_widget(self, m: dict):
-        """Восстанавливает виджет сообщения из сохранённых данных."""
         mt       = m["msg_type"]
         is_user  = m["is_user"]
         one_time = m["one_time"]
@@ -219,7 +215,6 @@ class ChatUI:
         return None
 
     def _save_text_msg(self, text: str, is_user: bool, quote: str = None) -> int | None:
-        """Сохраняет текстовое сообщение в БД. Возвращает id записи."""
         if not self.chat_id:
             return None
         try:
@@ -237,7 +232,6 @@ class ChatUI:
 
     def _save_file_msg(self, file_path: str, file_name: str, msg_type: str,
                        is_user: bool, one_time: bool = False):
-        """Сохраняет файловое сообщение в БД."""
         if not self.chat_id:
             return
         try:
@@ -268,13 +262,19 @@ class ChatUI:
         self.page.update()
 
     def scroll_to_bottom(self):
-        self.messages_column.scroll_to(offset=-1, duration=300)
+        try:
+            self.messages_column.scroll_to(offset=-1, duration=300)
+        except AssertionError:
+            pass
 
     def add_message_to_chat(self, widget):
         self.messages_column.controls.append(widget)
         self.all_messages.append(widget)
-        self.scroll_to_bottom()
-        self.page.update()
+        try:
+            self.scroll_to_bottom()
+            self.page.update()
+        except AssertionError:
+            pass
 
     # ── Панель ответа ─────────────────────────────────────────────────────────
 
@@ -435,7 +435,6 @@ class ChatUI:
                 edited_tag.value           = "изменено"
                 msg_text_ref.current.update()
                 edited_tag.update()
-                # Сохраняем изменение в БД
                 if db_msg_id:
                     try:
                         db_ops.update_message_content(db_msg_id, new_text)
@@ -480,7 +479,6 @@ class ChatUI:
     def delete_message(self, widget, text: str = "", db_msg_id: int = None):
         if widget not in self.messages_column.controls:
             return
-        # Пытаемся уведомить собеседника — но ошибка сокета не останавливает удаление
         try:
             conn.send_text({
                 "type":         "delete",
@@ -490,16 +488,14 @@ class ChatUI:
                 "timestamp":    datetime.datetime.now().timestamp(),
             })
         except Exception:
-            pass  # сокет закрыт — ничего страшного, удаляем локально
+            pass
 
-        # Удаляем из БД
         if db_msg_id:
             try:
                 db_ops.delete_single_message(db_msg_id)
             except Exception as ex:
                 print(f"❌ Ошибка удаления из БД: {ex}")
 
-        # Удаляем с экрана
         try:
             self.messages_column.controls.remove(widget)
             if widget in self.all_messages:
@@ -555,7 +551,6 @@ class ChatUI:
         edited_tag   = ft.Text("", size=10, color=ft.Colors.WHITE54, italic=True)
         current_text = [text]
 
-        # Время: из сохранённой записи или текущее
         display_time = _now_hm()
         if saved_time:
             try:
@@ -916,7 +911,6 @@ class ChatUI:
         if not text or self.is_blocked[0]:
             return
         quote = self.reply_to[0]
-        # Сохраняем в БД и получаем id записи
         db_id = self._save_text_msg(text, is_user=True, quote=quote)
         self.add_message_to_chat(
             self.create_text_message(text, is_user=True, quote=quote, db_msg_id=db_id)
@@ -1029,8 +1023,11 @@ class ChatUI:
         self.messages_column.controls.append(widget)
         self.all_messages.append(widget)
         self.sent_media_files.append({"name": name, "type": e, "path": saved_path})
-        self.scroll_to_bottom()
-        self.page.update()
+        try:
+            self.scroll_to_bottom()
+            self.page.update()
+        except AssertionError:
+            pass
 
     # ── Входящие сообщения ────────────────────────────────────────────────────
 
@@ -1083,13 +1080,20 @@ class ChatUI:
                     in_quote = msg.get("reply_to")
                     if (text and sender_id == self.CONTACT_USER["id"]
                             and not self.is_blocked[0]):
-                        # Сохраняем входящее текстовое сообщение и получаем id
                         db_id = self._save_text_msg(text, is_user=False, quote=in_quote)
-                        self.add_message_to_chat(
-                            self.create_text_message(text, is_user=False,
-                                                     quote=in_quote, db_msg_id=db_id))
+                        widget = self.create_text_message(text, is_user=False,
+                                                          quote=in_quote, db_msg_id=db_id)
+                        self.messages_column.controls.append(widget)
+                        self.all_messages.append(widget)
         except queue.Empty:
             pass
+        
+        try:
+            self.messages_column.update()
+            self.scroll_to_bottom()
+        except AssertionError:
+            pass
+        
         threading.Timer(0.5, self.poll_queue).start()
 
     # ── Голосовые сообщения ───────────────────────────────────────────────────
@@ -1513,7 +1517,6 @@ class ChatUI:
 
     def clear_all_chat(self):
         def confirm(e):
-            # Удаляем сообщения из БД
             if self.chat_id:
                 try:
                     db_ops.delete_messages_for_chat(self.chat_id)
@@ -1526,7 +1529,6 @@ class ChatUI:
             self.messages_column.update()
             self.page.close(dlg)
 
-            # Удаляем медиафайлы с диска
             for folder in (ASSETS_FOLDER, INCOMING_FOLDER, VOICE_FOLDER):
                 if os.path.exists(folder):
                     for filename in os.listdir(folder):

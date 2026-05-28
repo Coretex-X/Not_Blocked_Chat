@@ -14,10 +14,10 @@ def chat_view(page: ft.Page) -> ft.View:
     status     = get_status_chat()
     contact_id = get_contact_id_by_chat(db_path, chat_id)
     my_id      = db.get_current_user_id()
-    
+
     print(f"[CHAT] my_id={my_id}, contact_id={contact_id}, status={status}, chat_id={chat_id}")
-    
-    contact    = db.get_contact_data(contact_id) if contact_id else None
+
+    contact = db.get_contact_data(contact_id) if contact_id else None
 
     if contact is None:
         contact_name  = "Неизвестный"
@@ -45,12 +45,11 @@ def chat_view(page: ft.Page) -> ft.View:
         "about":        "None",
     }
 
-    # Проверяем перед подключением
     if my_id and contact_id and status:
         print(f"[CHAT] Вызываю start_connection({my_id}, {contact_id}, {status})")
         conn.start_connection(str(my_id), str(contact_id), status)
     else:
-        print(f"[CHAT] ❌ Пропускаю подключение: my_id={my_id}, contact_id={contact_id}, status={status}")
+        print(f"[CHAT] ❌ Пропускаю подключение")
 
     ui = ChatUI(page, current_user, contact_user, chat_id=chat_id)
 

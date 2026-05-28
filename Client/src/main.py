@@ -5,40 +5,34 @@ import websocket
 import json
 import threading
 import requests
+from app import notification_bridge  # разрываем циклический импорт через посредника
 from app.menu import main_menu
 from app.settings import settings_view
 from app.registration import main_registartion
 from app.sign_up import main_sign_up
 from app.chat import chat_view
 
-db_path = f"{path.db_path()}user_data.db"
-
-WS_HOST = "ws://127.0.0.1:5000"
+db_path  = f"{path.db_path()}user_data.db"
+WS_HOST  = "ws://127.0.0.1:5000"
 API_HOST = "http://127.0.0.1:5000"
 
-ws_notification = None
-notification_thread = None
+ws_notification       = None
+notification_thread   = None
 notification_messages = []
 
 with ql.connect(db_path) as con:
     cur = con.cursor()
     cur.execute("""
         CREATE TABLE IF NOT EXISTS users_data(
-            id_user INTEGER,
-            name TEXT,
-            profile TEXT,
-            number TEXT,
-            token TEXT,
-            room TEXT,
-            avatar TEXT)
+            id_user INTEGER, name TEXT, profile TEXT,
+            number TEXT, token TEXT, room TEXT, avatar TEXT)
     """)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS user_settings(
             authorization TEXT DEFAULT 'false',
             color_theme TEXT DEFAULT 'light',
             language TEXT DEFAULT 'ru',
-            font_size TEXT DEFAULT '17'
-        )
+            font_size TEXT DEFAULT '17')
     """)
     try:
         cur.execute("ALTER TABLE user_settings ADD COLUMN font_size TEXT DEFAULT '14'")
@@ -51,8 +45,8 @@ with ql.connect(db_path) as con:
     cur.execute("SELECT authorization, color_theme, font_size FROM user_settings LIMIT 1")
     row = cur.fetchone()
     is_authorized = (row[0] if row else 'false') == 'true'
-    start_theme = row[1] if row and row[1] else 'dark'
-    start_font = int(row[2]) if row and row[2] else 14
+    start_theme   = row[1] if row and row[1] else 'dark'
+    start_font    = int(row[2]) if row and row[2] else 14
 
 with ql.connect(db_path) as con:
     cur = con.cursor()
@@ -71,59 +65,68 @@ def get_user_data():
         return None
 
 
+def increment_unread(sender_id: str):
+    """Увеличивает unread_count чата и возвращает chat_id."""
+    try:
+        with ql.connect(db_path) as con:
+            cur = con.cursor()
+            cur.execute("SELECT chat_id FROM chats WHERE contact_id = ?", (sender_id,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            chat_id = row[0]
+            cur.execute(
+                "UPDATE chats SET unread_count = unread_count + 1 WHERE chat_id = ?",
+                (chat_id,)
+            )
+            con.commit()
+            return chat_id
+    except Exception as e:
+        print(f"[UNREAD] Ошибка: {e}")
+        return None
+
+
+def reset_unread(chat_id: int):
+    """Сбрасывает счётчик непрочитанных при открытии чата."""
+    try:
+        with ql.connect(db_path) as con:
+            cur = con.cursor()
+            cur.execute("UPDATE chats SET unread_count = 0 WHERE chat_id = ?", (chat_id,))
+            con.commit()
+    except Exception as e:
+        print(f"[UNREAD] Ошибка сброса: {e}")
+
+
 def check_offline_messages():
-    """Проверяет офлайн-сообщения через REST API"""
     user_data = get_user_data()
     if not user_data:
-        print("[ОФЛАЙН] Нет данных пользователя")
         return
-    
     try:
         response = requests.post(
             f"{API_HOST}/notification/v2/user/notification/",
-            json={
-                "id_users": user_data["user_id"],
-                "token": user_data["token"]
-            }
+            json={"id_users": user_data["user_id"], "token": user_data["token"]}
         )
-        
         if response.status_code == 200:
             data = response.json()
             if isinstance(data, list):
-                print(f"\n{'='*50}")
-                print(f"  📬 ОФЛАЙН-СООБЩЕНИЯ ({len(data)} шт.)")
-                print(f"{'='*50}")
+                print(f"[ОФЛАЙН] {len(data)} сообщений")
                 for msg in data:
-                    print(f"  От: User {msg.get('id_senders', '?')}")
-                    print(f"  Комната: {msg.get('room', '?')}")
-                    print(f"  Сообщение: {msg.get('message', '')}")
-                    print(f"  Статус: {msg.get('status_chat', '?')}")
-                    print(f"  Время: {msg.get('timestamp', '?')}")
-                    print(f"{'─'*40}")
-            elif isinstance(data, dict) and data.get("message") == "no message":
-                print("[ОФЛАЙН] Нет новых сообщений")
-            else:
-                print(f"[ОФЛАЙН] Ответ: {data}")
-        else:
-            print(f"[ОФЛАЙН] Ошибка: {response.status_code}")
-            
+                    sid = str(msg.get('id_senders', ''))
+                    if sid:
+                        chat_id = increment_unread(sid)
+                        if chat_id:
+                            notification_bridge.fire_notification(chat_id)
     except Exception as e:
-        print(f"[ОФЛАЙН] Ошибка запроса: {e}")
+        print(f"[ОФЛАЙН] Ошибка: {e}")
 
 
 def connect_notifications(user_id, notification_room):
     global ws_notification, notification_thread
-    
     try:
         ws_notification = websocket.WebSocket()
         ws_notification.connect(f"{WS_HOST}/ws/notifications/")
-        ws_notification.send(json.dumps({
-            "user_id": user_id,
-            "room": notification_room
-        }))
-        
+        ws_notification.send(json.dumps({"user_id": user_id, "room": notification_room}))
         ws_notification.recv()
-        
         notification_thread = threading.Thread(target=listen_notifications, daemon=True)
         notification_thread.start()
         return True
@@ -134,14 +137,19 @@ def connect_notifications(user_id, notification_room):
 
 def listen_notifications():
     global ws_notification, notification_messages
-    
     while True:
         try:
             message = ws_notification.recv()
-            data = json.loads(message)
+            data    = json.loads(message)
             notification_messages.append(data)
             print(f"[УВЕДОМЛЕНИЕ] {json.dumps(data, ensure_ascii=False)}")
-        except:
+            if data.get("type") == "new_message":
+                sender_id = str(data.get("sender_id", ""))
+                if sender_id:
+                    chat_id = increment_unread(sender_id)
+                    if chat_id:
+                        notification_bridge.fire_notification(chat_id)
+        except Exception:
             break
 
 
@@ -150,34 +158,43 @@ def disconnect_notifications():
     if ws_notification:
         try:
             ws_notification.close()
-        except:
+        except Exception:
             pass
         ws_notification = None
 
 
 def init_notifications():
     if not is_authorized:
-        print("[УВЕДОМЛЕНИЯ] Пользователь не авторизован")
         return
-    
     user_data = get_user_data()
     if not user_data:
-        print("[УВЕДОМЛЕНИЯ] Нет данных пользователя в БД")
         return
-    
-    # Сначала проверяем офлайн-сообщения
     check_offline_messages()
-    
-    # Потом подключаем уведомления
     connect_notifications(user_data["user_id"], user_data["room"])
 
 
 def main(page: ft.Page):
     page.theme_mode = color_theme
-    
     init_notifications()
-    
+
     def route_change(route):
+        # Если уходим из чата — закрываем соединение
+        prev_route = getattr(page, '_prev_route', None)
+        if prev_route == "/chat" and page.route != "/chat":
+            try:
+                from app.components.chat import chat_connection as _conn
+                _conn.stop_connection()
+            except Exception:
+                pass
+        page._prev_route = page.route
+
+        # При возврате в главное меню сбрасываем счётчик открытого чата
+        from app.components.chat.chat_manager import get_chat_id
+        if page.route in ("/", "/main"):
+            _cid = get_chat_id()
+            if _cid:
+                reset_unread(_cid)
+
         page.views.clear()
         page.views.append(main_menu(page))
 
@@ -196,11 +213,11 @@ def main(page: ft.Page):
             page.views.append(chat_view(page))
 
         page.update()
-    
+
     def on_close(e):
         disconnect_notifications()
-    
-    page.on_close = on_close
+
+    page.on_close        = on_close
     page.on_route_change = route_change
     page.go(page.route)
 

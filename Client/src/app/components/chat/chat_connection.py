@@ -9,8 +9,8 @@ from .geniration_token import GuaranteedUniqueTokenGenerator
 
 # ── Генерация токенов ─────────────────────────────────────────────────────────
 
-_gen   = GuaranteedUniqueTokenGenerator()
-token  = _gen.generate_token(90)
+_gen       = GuaranteedUniqueTokenGenerator()
+token      = _gen.generate_token(90)
 lobbi_new  = _gen.generate_token(90)
 
 # ── Константы ─────────────────────────────────────────────────────────────────
@@ -28,14 +28,14 @@ db_path = f"{path.db_path()}user_data.db"
 
 message_queue: queue.Queue = queue.Queue()
 ws: websocket.WebSocket | None = None
-running = True
+running   = False   # FIX: не запускаем receive_loop пока не подключились
 LOBBI_TIME = None
+_stop_event = threading.Event()
 
 
 # ── Вспомогательные функции БД ────────────────────────────────────────────────
 
 def get_room_by_contact(contact_id: str) -> str | None:
-    """Ищет комнату по contact_id в таблице contacts"""
     try:
         with ql.connect(db_path) as con:
             cur = con.cursor()
@@ -50,25 +50,18 @@ def get_room_by_contact(contact_id: str) -> str | None:
 
 
 def save_room_for_contact(my_id: str, contact_id: str, room: str):
-    """Сохраняет или создаёт запись с комнатой в contacts для обоих пользователей"""
     try:
         with ql.connect(db_path) as con:
             cur = con.cursor()
-            
             for uid in (str(my_id), str(contact_id)):
                 cur.execute("SELECT user_id FROM contacts WHERE user_id = ?", (uid,))
                 if cur.fetchone():
-                    # Запись есть - обновляем комнату
                     cur.execute("UPDATE contacts SET room = ? WHERE user_id = ?", (room, uid))
-                    print(f"[БД] Обновлена комната для user_id={uid}")
                 else:
-                    # Записи нет - создаём с комнатой
                     cur.execute(
                         "INSERT INTO contacts (user_id, room, status_user_contact) VALUES (?, ?, 'not_save_user')",
                         (uid, room)
                     )
-                    print(f"[БД] Создана запись для user_id={uid} с комнатой {room}")
-            
             con.commit()
             print(f"[БД] Комната {room} сохранена")
     except Exception as e:
@@ -78,11 +71,14 @@ def save_room_for_contact(my_id: str, contact_id: str, room: str):
 # ── Публичный API ─────────────────────────────────────────────────────────────
 
 def start_connection(my_id: str, contact_id: str, status_chat: str):
-    """Аутентифицирует чат-комнату, открывает WS и запускает поток чтения."""
-    global ws, LOBBI_TIME
-    
+    """Закрывает предыдущее соединение, аутентифицирует и открывает новое."""
+    global ws, LOBBI_TIME, running, _stop_event
+
+    # FIX 1: перед новым подключением всегда закрываем старое
+    stop_connection()
+
     print(f"[ЧАТ] my_id={my_id}, contact_id={contact_id}, status_chat={status_chat}")
-    
+
     try:
         if status_chat == 'existing_chat':
             LOBBI_TIME = get_room_by_contact(contact_id)
@@ -94,26 +90,58 @@ def start_connection(my_id: str, contact_id: str, status_chat: str):
             LOBBI_TIME = lobbi_new
             save_room_for_contact(my_id, contact_id, LOBBI_TIME)
             print(f"[ЧАТ] Новая комната: {LOBBI_TIME}")
-        
+
         _authenticate(my_id, contact_id, status_chat)
-        
+
         ws = websocket.WebSocket()
         ws.connect(WS_URL_NEW_CHAT if status_chat == 'new_chat' else WS_URL_CHAT)
+
+        # Сбрасываем stop_event и запускаем receive_loop
+        _stop_event.clear()
+        running = True
         threading.Thread(target=_receive_loop, daemon=True).start()
         print(f"[ЧАТ] ✅ Подключен к {LOBBI_TIME}")
-        
+
     except Exception as e:
         print(f"[ЧАТ] ❌ Ошибка подключения: {e}")
 
 
+def stop_connection():
+    """FIX 1: Корректно закрывает WebSocket соединение при выходе из чата."""
+    global ws, running
+    running = False
+    _stop_event.set()
+    if ws:
+        try:
+            ws.close()
+        except Exception:
+            pass
+        ws = None
+    print("[ЧАТ] Соединение закрыто")
+
+    # FIX 4: очищаем очередь сообщений чтобы старые сообщения не дублировались
+    # при следующем входе в чат
+    while not message_queue.empty():
+        try:
+            message_queue.get_nowait()
+        except queue.Empty:
+            break
+
+
 def send_text(payload: dict):
     if ws:
-        ws.send(json.dumps(payload))
+        try:
+            ws.send(json.dumps(payload))
+        except Exception as e:
+            print(f"[ЧАТ] Ошибка отправки: {e}")
 
 
 def send_binary(data: bytes):
     if ws:
-        ws.send_binary(data)
+        try:
+            ws.send_binary(data)
+        except Exception as e:
+            print(f"[ЧАТ] Ошибка отправки бинарных данных: {e}")
 
 
 # ── Внутренние функции ────────────────────────────────────────────────────────
@@ -141,16 +169,18 @@ def _authenticate(my_id: str, contact_id: str, status_chat: str):
 def _receive_loop():
     global running
     print("[ЧАТ] Слушаю входящие сообщения...")
-    while running:
+    while running and not _stop_event.is_set():
         try:
             raw = ws.recv()
+            if _stop_event.is_set():
+                break
             if isinstance(raw, str):
                 message_queue.put(json.loads(raw))
             elif isinstance(raw, bytes):
                 sep = raw.find(FILE_SEPARATOR)
                 if sep == -1:
                     continue
-                meta  = json.loads(raw[:sep].decode("utf-8"))
+                meta   = json.loads(raw[:sep].decode("utf-8"))
                 fbytes = raw[sep + len(FILE_SEPARATOR):]
                 message_queue.put({
                     "type":      "file",
@@ -159,21 +189,17 @@ def _receive_loop():
                     "file_size": meta.get("file_size", len(fbytes)),
                     "file_data": base64.b64encode(fbytes).decode("utf-8"),
                     "sender_id": meta.get("sender_id"),
+                    "one_time_view": meta.get("one_time_view", False),
                 })
         except websocket.WebSocketConnectionClosedException:
             print("[ЧАТ] Соединение закрыто")
             break
         except Exception as e:
-            print(f"[ЧАТ] ❌ Ошибка получения: {e}")
+            if not _stop_event.is_set():
+                print(f"[ЧАТ] ❌ Ошибка получения: {e}")
             break
 
 
 def close():
-    global running, ws
-    running = False
-    if ws:
-        try:
-            ws.close()
-        except:
-            pass
-    print("[ЧАТ] Соединение закрыто")
+    """Алиас для обратной совместимости."""
+    stop_connection()

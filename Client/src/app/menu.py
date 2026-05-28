@@ -1,5 +1,6 @@
 import flet as ft
 import path
+from . import notification_bridge  # посредник вместо прямого импорта main
 from .components.database import (
     init_database, load_contacts, load_chats,
     get_user_data, load_favorite_chats, get_contact_display_name,
@@ -34,15 +35,13 @@ def main_menu(page: ft.Page) -> ft.View:
     new_group_fab = ft.FloatingActionButton(
         icon=ft.Icons.GROUP_ADD, tooltip="Новая группа", mini=True, on_click=None)
 
-    # ── Вспомогательная: статус контакта по chat ──────────────────────────────
-
     def _contact_status_map():
         fresh_contacts = load_contacts(db)
         return {c["id"]: c.get("status_user_contact", "save_user") for c in fresh_contacts}
 
     def _make_chat_item(chat, status_map):
-        display = dict(chat)
-        cid = chat.get("contact_id")
+        display  = dict(chat)
+        cid      = chat.get("contact_id")
         if cid:
             display["name"] = get_contact_display_name(db, cid)
         c_status = status_map.get(cid, "save_user")
@@ -53,8 +52,6 @@ def main_menu(page: ft.Page) -> ft.View:
                 handlers['handle_chat_menu'](cid, action, update_chats_list),
             contact_status=c_status,
         )
-
-    # ── Обновление вкладок ────────────────────────────────────────────────────
 
     def _empty(icon, text, hint=""):
         return ft.Container(
@@ -81,7 +78,10 @@ def main_menu(page: ft.Page) -> ft.View:
                 _empty(ft.Icons.CHAT, "Нет чатов",
                        "Начните новый чат, нажав кнопку ниже"))
         update_favorites_list()
-        page.update()
+        try:
+            page.update()
+        except Exception:
+            pass
 
     def update_favorites_list():
         favs = load_favorite_chats(db)
@@ -94,15 +94,17 @@ def main_menu(page: ft.Page) -> ft.View:
             favorites_col.controls.append(
                 _empty(ft.Icons.STAR_OUTLINE, "Нет избранных чатов",
                        "Удерживайте чат, чтобы добавить в избранное"))
-        page.update()
+        try:
+            page.update()
+        except Exception:
+            pass
 
     def update_contacts_tab():
         nonlocal contacts
         contacts = load_contacts(db)
         contacts_col.controls.clear()
         if not contacts:
-            contacts_col.controls.append(
-                _empty(ft.Icons.CONTACTS, "Нет контактов"))
+            contacts_col.controls.append(_empty(ft.Icons.CONTACTS, "Нет контактов"))
         else:
             for c in contacts:
                 contacts_col.controls.append(
@@ -115,9 +117,19 @@ def main_menu(page: ft.Page) -> ft.View:
                             )
                     )
                 )
-        page.update()
+        try:
+            page.update()
+        except Exception:
+            pass
 
-    # ── Обработчики ───────────────────────────────────────────────────────────
+    # Регистрируем колбэк через посредника — без импорта main
+    def _on_new_message(chat_id: int):
+        try:
+            update_chats_list()
+        except Exception as ex:
+            print(f"[УВЕДОМЛЕНИЕ] Ошибка обновления: {ex}")
+
+    notification_bridge.set_notification_callback(_on_new_message)
 
     handlers = setup_handlers(
         page=page, db_path=db, contacts=contacts, chats=chats,
@@ -142,8 +154,6 @@ def main_menu(page: ft.Page) -> ft.View:
 
     new_chat_fab.on_click  = open_new_chat_dialog
     new_group_fab.on_click = handlers['soon_popup']
-
-    # ── AppBar ────────────────────────────────────────────────────────────────
 
     appbar = ft.AppBar(
         leading=ft.Image(src="image/not_blocked_chat.ico",
@@ -189,8 +199,6 @@ def main_menu(page: ft.Page) -> ft.View:
         ])],
     )
 
-    # ── Вкладки ───────────────────────────────────────────────────────────────
-
     tabs = ft.Tabs(
         selected_index=0,
         animation_duration=300,
@@ -215,8 +223,7 @@ def main_menu(page: ft.Page) -> ft.View:
                         ft.Container(
                             content=ft.Column([
                                 ft.Icon(ft.Icons.GROUP, size=50, color=ft.Colors.GREY),
-                                ft.Text("Группы появятся здесь", size=16,
-                                        color=ft.Colors.GREY),
+                                ft.Text("Группы появятся здесь", size=16, color=ft.Colors.GREY),
                             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=20),
                             alignment=ft.alignment.center, expand=True,
                         ),

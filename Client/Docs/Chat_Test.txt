@@ -59,19 +59,14 @@ Chat_Test__
                 main.py
                 path.py
 
-//path.py
-import os
-
-def db_path() -> str:
-    """Возвращает абсолютный путь к папке с базой данных."""
-    #base = os.path.dirname(os.path.abspath(__file__))
-    #return os.path.join(base, "assets", "data") + os.sep
-    #return "/home/username/Test/Test_Chat/ChatTest/Client/src/assets/data/"
-    return "/home/archlinux05/Home/Test/Not Blocked Chat/Client/src/assets/data/"
 //main.py
 import flet as ft
 import sqlite3 as ql
 import path
+import websocket
+import json
+import threading
+import requests
 from app.menu import main_menu
 from app.settings import settings_view
 from app.registration import main_registartion
@@ -80,7 +75,13 @@ from app.chat import chat_view
 
 db_path = f"{path.db_path()}user_data.db"
 
-# Создаём таблицы при первом запуске
+WS_HOST = "ws://127.0.0.1:5000"
+API_HOST = "http://127.0.0.1:5000"
+
+ws_notification = None
+notification_thread = None
+notification_messages = []
+
 with ql.connect(db_path) as con:
     cur = con.cursor()
     cur.execute("""
@@ -90,6 +91,7 @@ with ql.connect(db_path) as con:
             profile TEXT,
             number TEXT,
             token TEXT,
+            room TEXT,
             avatar TEXT)
     """)
     cur.execute("""
@@ -100,22 +102,19 @@ with ql.connect(db_path) as con:
             font_size TEXT DEFAULT '17'
         )
     """)
-    # Миграция: добавляем font_size если нет
     try:
         cur.execute("ALTER TABLE user_settings ADD COLUMN font_size TEXT DEFAULT '14'")
     except ql.OperationalError:
         pass
     con.commit()
 
-# Читаем настройки при старте
 with ql.connect(db_path) as con:
     cur = con.cursor()
     cur.execute("SELECT authorization, color_theme, font_size FROM user_settings LIMIT 1")
     row = cur.fetchone()
     is_authorized = (row[0] if row else 'false') == 'true'
-    start_theme   = row[1] if row and row[1] else 'dark'
-    start_font    = int(row[2]) if row and row[2] else 14
-
+    start_theme = row[1] if row and row[1] else 'dark'
+    start_font = int(row[2]) if row and row[2] else 14
 
 with ql.connect(db_path) as con:
     cur = con.cursor()
@@ -123,8 +122,122 @@ with ql.connect(db_path) as con:
     row = cur.fetchone()
     color_theme = row[0] if row else "dark"
 
+
+def get_user_data():
+    with ql.connect(db_path) as con:
+        cur = con.cursor()
+        cur.execute("SELECT id_user, token, room FROM users_data LIMIT 1")
+        row = cur.fetchone()
+        if row and row[0] and row[1] and row[2]:
+            return {"user_id": row[0], "token": row[1], "room": row[2]}
+        return None
+
+
+def check_offline_messages():
+    """Проверяет офлайн-сообщения через REST API"""
+    user_data = get_user_data()
+    if not user_data:
+        print("[ОФЛАЙН] Нет данных пользователя")
+        return
+    
+    try:
+        response = requests.post(
+            f"{API_HOST}/notification/v2/user/notification/",
+            json={
+                "id_users": user_data["user_id"],
+                "token": user_data["token"]
+            }
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            if isinstance(data, list):
+                print(f"\n{'='*50}")
+                print(f"  📬 ОФЛАЙН-СООБЩЕНИЯ ({len(data)} шт.)")
+                print(f"{'='*50}")
+                for msg in data:
+                    print(f"  От: User {msg.get('id_senders', '?')}")
+                    print(f"  Комната: {msg.get('room', '?')}")
+                    print(f"  Сообщение: {msg.get('message', '')}")
+                    print(f"  Статус: {msg.get('status_chat', '?')}")
+                    print(f"  Время: {msg.get('timestamp', '?')}")
+                    print(f"{'─'*40}")
+            elif isinstance(data, dict) and data.get("message") == "no message":
+                print("[ОФЛАЙН] Нет новых сообщений")
+            else:
+                print(f"[ОФЛАЙН] Ответ: {data}")
+        else:
+            print(f"[ОФЛАЙН] Ошибка: {response.status_code}")
+            
+    except Exception as e:
+        print(f"[ОФЛАЙН] Ошибка запроса: {e}")
+
+
+def connect_notifications(user_id, notification_room):
+    global ws_notification, notification_thread
+    
+    try:
+        ws_notification = websocket.WebSocket()
+        ws_notification.connect(f"{WS_HOST}/ws/notifications/")
+        ws_notification.send(json.dumps({
+            "user_id": user_id,
+            "room": notification_room
+        }))
+        
+        ws_notification.recv()
+        
+        notification_thread = threading.Thread(target=listen_notifications, daemon=True)
+        notification_thread.start()
+        return True
+    except Exception as e:
+        print(f"[УВЕДОМЛЕНИЯ] Ошибка подключения: {e}")
+        return False
+
+
+def listen_notifications():
+    global ws_notification, notification_messages
+    
+    while True:
+        try:
+            message = ws_notification.recv()
+            data = json.loads(message)
+            notification_messages.append(data)
+            print(f"[УВЕДОМЛЕНИЕ] {json.dumps(data, ensure_ascii=False)}")
+        except:
+            break
+
+
+def disconnect_notifications():
+    global ws_notification
+    if ws_notification:
+        try:
+            ws_notification.close()
+        except:
+            pass
+        ws_notification = None
+
+
+def init_notifications():
+    if not is_authorized:
+        print("[УВЕДОМЛЕНИЯ] Пользователь не авторизован")
+        return
+    
+    user_data = get_user_data()
+    if not user_data:
+        print("[УВЕДОМЛЕНИЯ] Нет данных пользователя в БД")
+        return
+    
+    # Сначала проверяем офлайн-сообщения
+    check_offline_messages()
+    
+    # Потом подключаем уведомления
+    connect_notifications(user_data["user_id"], user_data["room"])
+
+
 def main(page: ft.Page):
     page.theme_mode = color_theme
+    
+    init_notifications()
     
     def route_change(route):
         page.views.clear()
@@ -145,13 +258,12 @@ def main(page: ft.Page):
             page.views.append(chat_view(page))
 
         page.update()
-
-    #def view_pop(view):
-    #    page.views.pop()
-    #    page.go(page.views[-1].route)
-
+    
+    def on_close(e):
+        disconnect_notifications()
+    
+    page.on_close = on_close
     page.on_route_change = route_change
-    #page.on_view_pop     = view_pop
     page.go(page.route)
 
 
@@ -406,6 +518,7 @@ def main_menu(page: ft.Page) -> ft.View:
         padding=0,
     )
 
+
 //app/chat.py
 import flet as ft
 import path
@@ -423,6 +536,9 @@ def chat_view(page: ft.Page) -> ft.View:
     status     = get_status_chat()
     contact_id = get_contact_id_by_chat(db_path, chat_id)
     my_id      = db.get_current_user_id()
+    
+    print(f"[CHAT] my_id={my_id}, contact_id={contact_id}, status={status}, chat_id={chat_id}")
+    
     contact    = db.get_contact_data(contact_id) if contact_id else None
 
     if contact is None:
@@ -451,15 +567,18 @@ def chat_view(page: ft.Page) -> ft.View:
         "about":        "None",
     }
 
-    conn.start_connection(my_id, contact_id, status)
+    # Проверяем перед подключением
+    if my_id and contact_id and status:
+        print(f"[CHAT] Вызываю start_connection({my_id}, {contact_id}, {status})")
+        conn.start_connection(str(my_id), str(contact_id), status)
+    else:
+        print(f"[CHAT] ❌ Пропускаю подключение: my_id={my_id}, contact_id={contact_id}, status={status}")
 
-    # Передаём chat_id в ChatUI для сохранения/загрузки истории
     ui = ChatUI(page, current_user, contact_user, chat_id=chat_id)
 
     page.overlay.append(ui.file_picker)
     page.update()
 
-    # Колбэки для входящих сообщений (используются извне при необходимости)
     page.data = {
         "add_incoming_text": lambda text, sid=None: ui.add_message_to_chat(
             ui.create_text_message(text, is_user=(sid == my_id))),
@@ -481,8 +600,7 @@ def chat_view(page: ft.Page) -> ft.View:
             expand=True,
             content=ft.Column([
                 ui.chat_header,
-                ft.Container(content=ui.messages_column, expand=True,
-                             padding=10),
+                ft.Container(content=ui.messages_column, expand=True, padding=10),
                 ui.voice_panel,
                 ui.input_bar,
             ], expand=True),
@@ -490,958 +608,8 @@ def chat_view(page: ft.Page) -> ft.View:
         padding=0,
     )
 
-//app/registration.py
-import flet as ft
-import httpx as hx
-import json as js
-import requests as rq
 
 
-def main_registartion(page: ft.Page):
-    page.title = "Регистрация"
-    page.vertical_alignment = ft.MainAxisAlignment.CENTER
-    page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
-
-    # Переменные для валидации
-    required_fields = []
-    error_text = ft.Text(color="red", visible=False)
-
-    def validate_fields():
-        # Проверяем все обязательные поля
-        for field in required_fields:
-            if not field.value:
-                field.error_text = "Это поле обязательно для заполнения"
-                field.update()
-                return False
-            
-        return True
-
-    def validate_password():
-        if text_input_password.value != text_input_password_clon.value:
-            text_input_password.error_text = "Пароли не совпадают"
-            text_input_password_clon.error_text = "Пароли не совпадают"
-            text_input_password.update()
-            text_input_password_clon.update()
-            return False
-        return True
-
-    async def rest_api(e):
-        # Сбрасываем ошибки
-        error_text.visible = False
-        error_text.update()
-        
-        for field in required_fields:
-            field.error_text = None
-            field.update()
-
-        # Валидация
-        if not validate_fields():
-            return
-            
-        if not validate_password():
-            return
-
-        #Удаляем первые 1-2 символа по условию
-        phone_number = text_input_number.value
-        if len(phone_number) == 11:
-            phone_number = phone_number[1:]  # удаляем первый символ
-        elif len(phone_number) == 12:
-            phone_number = phone_number[2:]  # удаляем первые два символа
-        # Подготовка данных
-        data = {
-            'login': text_input_login.value,
-            'email': text_input_email.value,
-            'number': phone_number,
-            'password': text_input_password.value
-        }
-
-        try:
-            # Отправка на сервер
-            async with hx.AsyncClient() as client:
-                response = await client.post(
-                    'http://127.0.0.1:5000/api/v2/user/registration/',
-                    json=data
-                )
-                
-            if response.status_code == 200:
-                    # Очистка полей после успешной отправки
-                    text_input_login.value = ""
-                    text_input_email.value = ""
-                    text_input_password.value = ""
-                    text_input_password_clon.value = ""
-                    page.go('/login')
-                    page.update()
-            else:
-                    error_text.value = f"Ошибка сервера: {response.text}"
-                    error_text.visible = True
-                    error_text.update()
-                    
-        except Exception as ex:
-            error_text.value = f"Ошибка соединения с сервером :("
-            print(f"Ошибка при отправке данных: {ex}")
-            error_text.visible = True
-            error_text.update()
-
-    # Элементы интерфейса
-    label = ft.Text('Регистрация:', size=30)
-    
-    text_input_login = ft.TextField(
-        label='Имя пользователя',
-        autofocus=True
-    )
-    
-    text_input_email = ft.TextField(
-        label='E-Mail'
-    )
-
-    text_input_number = ft.TextField(
-        label='Телефон')
-    
-    text_input_password = ft.TextField(
-        label='Пароль',
-        password=True,
-        can_reveal_password=True
-    )
-    
-    text_input_password_clon = ft.TextField(
-        label='Повторите пароль',
-        password=True,
-        can_reveal_password=True
-    )
-    
-    button = ft.ElevatedButton(
-        'Зарегистрироваться',
-        on_click=rest_api
-    )
-
-    or_sign_up = ft.Text('Есть аккаунт?')
-
-    button_sign_up = ft.ElevatedButton(
-        'Войти',
-        on_click= lambda _: page.go('/login')
-    )
-
-
-    # Добавляем поля в список обязательных
-    required_fields = [
-        text_input_login,
-        text_input_email,
-        text_input_number,
-        text_input_password,
-        text_input_password_clon
-    ]
-
-    # Собираем интерфейс
-    return ft.View(
-        "/registration",
-        [
-            ft.Container(
-                ft.Column(
-                    [
-                        ft.Container(label, margin=5),
-                        ft.Container(text_input_login, margin=5),
-                        ft.Container(text_input_email, margin=5),
-                        ft.Container(text_input_number, margin=5),
-                        ft.Container(text_input_password, margin=5),
-                        ft.Container(text_input_password_clon, margin=5),
-                        ft.Container(error_text, margin=5),
-                        ft.Container(button, margin=5, alignment=ft.alignment.center),
-                        ft.Container(or_sign_up, margin=5, alignment=ft.alignment.center),
-                        ft.Container(button_sign_up, margin=5, alignment=ft.alignment.center)
-                    ],
-                    alignment=ft.MainAxisAlignment.CENTER,
-                    width=400
-                ),
-                expand=True,
-                alignment=ft.alignment.center
-            )
-        ],
-        # appbar=appbar,
-        # navigation_bar=navigation_bar
-    )
-
-
-
-//app/sign_up.py
-import flet as ft
-import httpx as hx
-import sqlite3 as ql
-import json as js
-import path
-
-db_path = f"{path.db_path()}user_data.db" 
-json_path = f"{path.db_path}config/config.jsonc"
-
-def main_sign_up(page: ft.Page):
-    page.title = "Авторизацыя"
-    #page.theme_mode = data["theme"]
-    page.vertical_alignment = ft.MainAxisAlignment.CENTER
-    page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
-
-    # Переменные для валидации
-    required_fields = []
-    error_text = ft.Text(color="red", visible=False)
-
-    def validate_fields():
-        # Проверяем все обязательные поля
-        for field in required_fields:
-            if not field.value:
-                field.error_text = "Это поле обязательно для заполнения"
-                field.update()
-                return False
-        return True
-
-    async def rest_api(e):
-        # Сбрасываем ошибки
-        error_text.visible = False
-        error_text.update()
-        
-        for field in required_fields:
-            field.error_text = None
-            field.update()
-
-        # Валидация
-        if not validate_fields():
-            return
-            
-        # Подготовка данных
-        data = {
-            'login': text_input_login.value,
-            'password': text_input_password.value
-        }
-
-        #try:
-            # Отправка на сервер
-        async with hx.AsyncClient() as client:
-                response = await client.post(
-                    'http://127.0.0.1:5000/api/v2/user/login/',
-                    json=data
-                )
-                
-        if response.status_code == 200:
-            json_response = response.json()
-            # Извлекаем данные из ответа
-            id_user = json_response["id_users"]
-            name = json_response["login"]
-            number = json_response["number"]
-            token = json_response["token"]
-            profil = json_response["profil"]
-            authorization = "true"
-            
-            with ql.connect(db_path) as con:
-                cur = con.cursor()
-                cur.execute("DELETE FROM user_settings")
-                cur.execute("DELETE FROM users_data")
-                cur.execute(
-                    "INSERT INTO users_data (id_user, name, profile, number, token) VALUES (?, ?, ?, ?, ?)",
-                    (id_user, name, profil, number, token)
-                )
-                cur.execute(
-                    "INSERT INTO user_settings (authorization) VALUES (?)",
-                    (authorization,)
-                )
-                # Очистка полей после успешной отправки
-                text_input_login.value = ""
-                text_input_password.value = ""
-                #Перенапровляем на главную страницу
-                page.go('/main')
-                page.update()
-            cur.close()
-
-        else:
-            error_text.value = f"Error:{response}"
-            error_text.visible = True
-            error_text.update()
-
-    # Элементы интерфейса
-    label = ft.Text('Авторизация:', size=30)
-    
-    text_input_login = ft.TextField(
-        label='Имя пользователя',
-        autofocus=True
-    )
-    
-    text_input_password = ft.TextField(
-        label='Пароль',
-        password=True,
-        can_reveal_password=True
-    )
-      
-    button = ft.ElevatedButton(
-        'Войти',
-        on_click=rest_api
-    )
-    
-    or_redistration = ft.Text('Нет аккаунта?')
-
-    button_registration = ft.ElevatedButton(
-        'Зарегистрироватся',
-        on_click= lambda _: page.go('/registration')
-    )
-
-    # Добавляем поля в список обязательных
-    required_fields = [
-        text_input_login,
-        text_input_password
-    ]
-
-    # Собираем интерфейс
-    return ft.View(
-    "/login",
-    [
-        ft.Container(
-            ft.Column(
-                [
-                    ft.Container(label, margin=5),
-                    ft.Container(text_input_login, margin=5),
-                    ft.Container(text_input_password, margin=5),
-                    ft.Container(error_text, margin=5),
-                    ft.Container(button, margin=5, alignment=ft.alignment.center),
-                    ft.Container(or_redistration, margin=5, alignment=ft.alignment.center),
-                    ft.Container(button_registration, margin=5, alignment=ft.alignment.center)
-                ],
-                alignment=ft.MainAxisAlignment.CENTER,
-                width=400
-            ),
-            expand=True,  # Растягиваем на весь доступный размер
-            alignment=ft.alignment.center  # Центрируем содержимое
-        )
-    ],
-    # appbar=appbar,  # раскомментируйте если нужно
-    # navigation_bar=navigation_bar  # раскомментируйте если нужно
-    )
-
-//app/settings.py
-import flet as ft
-import sqlite3 as sql
-import path
-import requests as http
-
-db_path = f"{path.db_path()}user_data.db"
-
-# Отправка изменённых данных пользователя (POST)
-PROFILE_UPDATE_URL =     "http://127.0.0.1:5000/search/v2/user/update_user_data/"
-
-
-# Удаление аккаунта (POST, в теле id и token)
-ACCOUNT_DELETE_URL = "http://127.0.0.1:5000/search/v2/user/delete_user/"
-
-
-# ── БД ───────────────────────────────────────────────────────────────────────
-
-def _migrate_settings():
-    """Добавляет font_size если нет."""
-    with sql.connect(db_path) as con:
-        cur = con.cursor()
-        try:
-            cur.execute("ALTER TABLE user_settings ADD COLUMN font_size TEXT DEFAULT '14'")
-        except sql.OperationalError:
-            pass
-        con.commit()
-
-
-def _load_settings() -> dict:
-    _migrate_settings()
-    with sql.connect(db_path) as con:
-        cur = con.cursor()
-        try:
-            cur.execute("SELECT color_theme, font_size FROM user_settings LIMIT 1")
-            row = cur.fetchone()
-            if row:
-                return {"color_theme": row[0] or "dark", "font_size": int(row[1] or 14)}
-        except sql.OperationalError:
-            pass
-    return {"color_theme": "dark", "font_size": 14}
-
-
-def _save_setting(key: str, value: str):
-    with sql.connect(db_path) as con:
-        cur = con.cursor()
-        cur.execute(f"UPDATE user_settings SET {key} = ?", (value,))
-        con.commit()
-
-
-def _load_user() -> dict:
-    """Возвращает словарь с данными пользователя, включая id и token."""
-    with sql.connect(db_path) as con:
-        cur = con.cursor()
-        try:
-            cur.execute(
-                "SELECT id_user, name, profile, number, avatar, token FROM users_data LIMIT 1"
-            )
-            row = cur.fetchone()
-            if row:
-                return {
-                    "id":       row[0],
-                    "name":     row[1] or "",
-                    "profile":  row[2] or "",
-                    "number":   row[3] or "",
-                    "avatar":   row[4] or "",
-                    "token":    row[5] or "",
-                }
-        except sql.OperationalError:
-            pass
-    return {"id": "", "name": "", "profile": "", "number": "", "avatar": "", "token": ""}
-
-
-def _apply_font(page: ft.Page, size: int):
-    t = ft.TextTheme(
-        body_medium=ft.TextStyle(size=size),
-        body_large=ft.TextStyle(size=size + 2),
-        body_small=ft.TextStyle(size=size - 2),
-    )
-    page.theme      = ft.Theme(text_theme=t)
-    page.dark_theme = ft.Theme(text_theme=t)
-
-
-# ── Вид ──────────────────────────────────────────────────────────────────────
-
-def settings_view(page: ft.Page) -> ft.View:
-    settings = _load_settings()
-    user     = _load_user()
-    is_dark  = settings["color_theme"] == "dark"
-
-    # ─── Цвета для текущей темы ─────────────────────────────────────────────
-
-    def get_colors():
-        """Возвращает словарь с цветами для текущей темы."""
-        dark = is_dark
-        return {
-            "title": ft.Colors.ON_SURFACE,
-            "subtitle": ft.Colors.GREY_400 if dark else ft.Colors.GREY_700,
-            "label": ft.Colors.GREY_400 if dark else ft.Colors.GREY_700,
-        }
-
-    colors = get_colors()
-
-    # ─── Функция обновления всех цветов ─────────────────────────────────────
-
-    def update_all_colors():
-        """Обновляет цвета всех текстовых элементов при смене темы."""
-        c = get_colors()
-        
-        # Профиль
-        name_text.color = c["title"]
-        profile_text.color = c["subtitle"]
-        
-        # Тема оформления
-        theme_title.color = c["title"]
-        theme_label.color = c["label"]
-        theme_icon.color = c["label"]
-        theme_icon.name = ft.Icons.DARK_MODE if is_dark else ft.Icons.LIGHT_MODE
-        
-        # Размер шрифта
-        font_title.color = c["title"]
-        font_size_lbl.color = c["label"]
-        font_icon.color = c["label"]
-        font_preview.color = c["label"]
-        
-        # Опасная зона
-        danger_icon.color = ft.Colors.RED
-        danger_title.color = ft.Colors.RED
-        
-        # TextField'ы в диалоге
-        f_name.color = c["title"]
-        f_name.label_style = ft.TextStyle(color=c["label"])
-        f_number.color = c["title"]
-        f_number.label_style = ft.TextStyle(color=c["label"])
-        f_profile.color = c["title"]
-        f_profile.label_style = ft.TextStyle(color=c["label"])
-        
-        # Заголовок диалога
-        edit_dlg.title.color = c["title"]
-        
-        # AppBar
-        appbar.title.color = c["title"]
-        
-        page.update()
-
-    # ── Диалог редактирования профиля ─────────────────────────────────────
-
-    f_name    = ft.TextField(
-        label="Имя",
-        value=user["name"],
-        border_radius=10,
-        color=colors["title"],
-        label_style=ft.TextStyle(color=colors["label"]),
-    )
-    f_number  = ft.TextField(
-        label="Номер",
-        value=user["number"],
-        border_radius=10,
-        keyboard_type=ft.KeyboardType.PHONE,
-        color=colors["title"],
-        label_style=ft.TextStyle(color=colors["label"]),
-    )
-    f_profile = ft.TextField(
-        label="Профиль / статус",
-        value=user["profile"],
-        border_radius=10,
-        color=colors["title"],
-        label_style=ft.TextStyle(color=colors["label"]),
-    )
-
-    def _save_profile(e):
-        # Сброс ошибок
-        f_name.error_text = None
-        f_number.error_text = None
-        f_name.border_color = None
-        f_number.border_color = None
-        page.update()
-
-        # Собираем данные (сервер ждёт login, number, status)
-        data = {
-            "id":      user["id"],
-            "token":   user["token"],
-            "login":   f_name.value.strip(),
-            "number":  f_number.value.strip(),
-            "status":  f_profile.value.strip(),
-        }
-
-        try:
-            resp = http.post(PROFILE_UPDATE_URL, json=data, timeout=10)
-            body = resp.json()
-
-            # Успех (код 200)
-            if resp.status_code == 200 and body.get("post") == 200:
-                # Обновляем локальную БД
-                with sql.connect(db_path) as con:
-                    cur = con.cursor()
-                    cur.execute(
-                        "UPDATE users_data SET name=?, profile=?, number=? WHERE id_user=?",
-                        (data["login"], data["status"], data["number"], data["id"])
-                    )
-                    con.commit()
-
-                # Обновляем словарь user и UI динамически
-                user["name"]    = data["login"]
-                user["profile"] = data["status"]
-                user["number"]  = data["number"]
-                name_text.value       = data["login"] or "Пользователь"
-                profile_text.value    = data["status"] or ""
-                
-                # Закрываем диалог
-                edit_dlg.open = False
-                
-                # Обновляем все цвета
-                update_all_colors()
-                
-                # Уведомление об успехе
-                page.snack_bar = ft.SnackBar(ft.Text("Данные изменены"), open=True)
-                page.update()
-                return
-
-            # Обработка ошибок сервера (из поля error)
-            error_msg = body.get("error", "")
-            
-            if "404_Login_already_covered" in error_msg:
-                f_name.error_text = "Имя пользователя недоступно"
-                f_name.border_color = ft.Colors.RED
-                
-            elif "404_Number_already_covered" in error_msg:
-                f_number.error_text = "Номер уже используется другим аккаунтом"
-                f_number.border_color = ft.Colors.RED
-                
-            elif "Неверный токен" in body.get("meaning", ""):
-                page.snack_bar = ft.SnackBar(
-                    ft.Text("Ошибка авторизации. Войдите заново."), open=True
-                )
-                
-            else:
-                # Другие ошибки
-                meaning = body.get("meaning", "Неизвестная ошибка")
-                page.snack_bar = ft.SnackBar(
-                    ft.Text(f"Ошибка: {meaning}"), open=True
-                )
-            page.update()
-
-        except Exception as ex:
-            page.snack_bar = ft.SnackBar(
-                ft.Text(f"Ошибка сети: {str(ex)[:100]}"), open=True
-            )
-            page.update()
-
-    edit_dlg = ft.AlertDialog(
-        modal=True,
-        title=ft.Text("Редактировать профиль", color=colors["title"]),
-        content=ft.Container(
-            content=ft.Column(
-                [
-                    ft.Stack(
-                        [
-                            ft.Container(
-                                content=ft.CircleAvatar(
-                                    foreground_image_src="image/user.png",
-                                    radius=45,
-                                ),
-                                alignment=ft.alignment.center,
-                            ),
-                            ft.Container(
-                                content=ft.IconButton(
-                                    ft.Icons.ADD_A_PHOTO,
-                                    icon_color=ft.Colors.WHITE,
-                                    icon_size=18,
-                                    style=ft.ButtonStyle(
-                                        bgcolor=ft.Colors.BLUE,
-                                        shape=ft.CircleBorder(),
-                                        padding=ft.padding.all(4),
-                                    ),
-                                    on_click=lambda e: None,
-                                ),
-                                alignment=ft.alignment.bottom_right,
-                                right=55, bottom=0,
-                            ),
-                        ],
-                        width=120, height=100,
-                    ),
-                    f_name,
-                    f_number,
-                    f_profile,
-                ],
-                spacing=12,
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                tight=True,
-            ),
-            width=300,
-            padding=ft.padding.only(top=8),
-        ),
-        actions=[
-            ft.TextButton("Сохранить",
-                          style=ft.ButtonStyle(color=ft.Colors.GREEN),
-                          on_click=_save_profile),
-            ft.TextButton("Отмена",
-                          on_click=lambda e: (setattr(edit_dlg, "open", False), page.update())),
-        ],
-    )
-    page.overlay.append(edit_dlg)
-
-    # ── Шапка профиля ─────────────────────────────────────────────────────
-
-    name_text = ft.Text(
-        user["name"] or "Пользователь",
-        weight=ft.FontWeight.BOLD, size=22,
-        text_align=ft.TextAlign.CENTER,
-        color=colors["title"],
-    )
-    profile_text = ft.Text(
-        user["profile"] or "",
-        size=14,
-        text_align=ft.TextAlign.CENTER,
-        color=colors["subtitle"],
-    )
-
-    def _open_edit_dialog(e):
-        setattr(edit_dlg, "open", True)
-        update_all_colors()
-
-    profile_header = ft.Container(
-        content=ft.Column(
-            [
-                ft.Stack(
-                    [
-                        ft.Container(
-                            content=ft.CircleAvatar(
-                                foreground_image_src="image/user.png",
-                                radius=50,
-                            ),
-                            alignment=ft.alignment.center,
-                        ),
-                        ft.Container(
-                            content=ft.IconButton(
-                                ft.Icons.EDIT,
-                                icon_color=ft.Colors.WHITE,
-                                icon_size=16,
-                                tooltip="Редактировать профиль",
-                                style=ft.ButtonStyle(
-                                    bgcolor=ft.Colors.BLUE_600,
-                                    shape=ft.CircleBorder(),
-                                    padding=ft.padding.all(4),
-                                ),
-                                on_click=_open_edit_dialog,
-                            ),
-                            alignment=ft.alignment.bottom_right,
-                            right=0, bottom=0,
-                        ),
-                    ],
-                    width=110, height=105,
-                ),
-                name_text,
-                profile_text,
-            ],
-            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-            spacing=8,
-        ),
-        alignment=ft.alignment.center,
-        padding=ft.padding.symmetric(vertical=20),
-    )
-
-    # ── Смена темы ─────────────────────────────────────────────────────────
-
-    theme_icon = ft.Icon(
-        ft.Icons.DARK_MODE if is_dark else ft.Icons.LIGHT_MODE,
-        color=colors["label"],
-    )
-    theme_title = ft.Text(
-        "Тема оформления",
-        size=16,
-        weight=ft.FontWeight.W_500,
-        color=colors["title"],
-    )
-    theme_label = ft.Text(
-        "Тёмная тема" if is_dark else "Светлая тема",
-        size=14,
-        color=colors["label"],
-    )
-
-    def _toggle_theme(e):
-        nonlocal is_dark
-        is_dark = e.control.value
-        new_theme = "dark" if is_dark else "light"
-        
-        # ЭТО СОХРАНЯЕТ В БД
-        with sql.connect(db_path) as con:
-            cur = con.cursor()
-            cur.execute("UPDATE user_settings SET color_theme = ?", (new_theme,))
-            con.commit()
-        
-        # Обновляем интерфейс
-        theme_label.value = "Тёмная тема" if is_dark else "Светлая тема"
-        theme_icon.name = ft.Icons.DARK_MODE if is_dark else ft.Icons.LIGHT_MODE
-        page.theme_mode = ft.ThemeMode.DARK if is_dark else ft.ThemeMode.LIGHT
-        update_all_colors()
-
-    theme_row = ft.Container(
-        content=ft.Row(
-            [
-                theme_icon,
-                ft.Column(
-                    [
-                        theme_title,
-                        theme_label,
-                    ],
-                    spacing=2, expand=True,
-                ),
-                ft.Switch(
-                    value=is_dark,
-                    on_change=_toggle_theme,
-                    active_track_color=ft.Colors.BLUE_700,
-                    thumb_color=ft.Colors.WHITE,
-                    inactive_track_color=ft.Colors.GREY,
-                ),
-            ],
-            spacing=14,
-            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-        ),
-        padding=ft.padding.symmetric(horizontal=16, vertical=12),
-        border_radius=12,
-    )
-
-    # ── Размер шрифта ─────────────────────────────────────────────────────
-
-    font_icon = ft.Icon(
-        ft.Icons.TEXT_FIELDS,
-        color=colors["label"],
-    )
-    font_title = ft.Text(
-        "Размер шрифта",
-        size=16,
-        weight=ft.FontWeight.W_500,
-        color=colors["title"],
-    )
-    font_size_val = settings["font_size"]
-    font_size_lbl = ft.Text(f"{font_size_val} px", size=13, color=colors["label"])
-    font_preview  = ft.Text(
-        "Пример текста сообщения",
-        size=font_size_val,
-        color=colors["label"],
-        text_align=ft.TextAlign.CENTER,
-    )
-
-    def _change_font(e):
-        val = int(e.control.value)
-        
-        # ЭТО СОХРАНЯЕТ В БД
-        with sql.connect(db_path) as con:
-            cur = con.cursor()
-            cur.execute("UPDATE user_settings SET font_size = ?", (str(val),))
-            con.commit()
-        
-        # Обновляем интерфейс
-        font_preview.size = val
-        font_size_lbl.value = f"{val} px"
-        page.update()
-
-    font_row = ft.Container(
-        content=ft.Column(
-            [
-                ft.Row(
-                    [
-                        font_icon,
-                        ft.Column(
-                            [
-                                font_title,
-                                font_size_lbl,
-                            ],
-                            spacing=2, expand=True,
-                        ),
-                    ],
-                    spacing=14,
-                ),
-                ft.Slider(
-                    value=font_size_val,
-                    min=11, max=22, divisions=11,
-                    label="{value} px",
-                    active_color=ft.Colors.BLUE_700,
-                    on_change=_change_font,
-                ),
-                ft.Container(
-                    content=font_preview,
-                    alignment=ft.alignment.center,
-                    padding=ft.padding.symmetric(vertical=4),
-                ),
-            ],
-            spacing=4,
-        ),
-        padding=ft.padding.symmetric(horizontal=16, vertical=12),
-        border_radius=12,
-    )
-
-    # ── Удаление аккаунта ─────────────────────────────────────────────────
-
-    danger_icon = ft.Icon(ft.Icons.WARNING, color=ft.Colors.RED)
-    danger_title = ft.Text(
-        "Удалить аккаунт",
-        size=16,
-        weight=ft.FontWeight.W_500,
-        color=ft.Colors.RED,
-    )
-
-    def _delete_account(e):
-        # Диалог подтверждения
-        confirm_dlg = ft.AlertDialog(
-            modal=True,
-            title=ft.Text("Удаление аккаунта", color=colors["title"]),
-            content=ft.Text(
-                "Вы уверены, что хотите удалить свой аккаунт? Это действие необратимо.",
-                color=colors["title"],
-            ),
-            actions=[
-                ft.TextButton(
-                    "Да",
-                    style=ft.ButtonStyle(color=ft.Colors.RED),
-                    on_click=lambda _: _perform_delete()
-                ),
-                ft.TextButton(
-                    "Нет",
-                    on_click=lambda _: (
-                        setattr(confirm_dlg, "open", False),
-                        page.update()
-                    )
-                ),
-            ],
-        )
-        page.overlay.append(confirm_dlg)
-        confirm_dlg.open = True
-        page.update()
-
-    def _perform_delete():
-        # Закрываем диалог подтверждения
-        for overlay in page.overlay[:]:
-            if isinstance(overlay, ft.AlertDialog) and overlay.title and \
-               overlay.title.value == "Удаление аккаунта":
-                overlay.open = False
-                break
-
-        page.update()
-        try:
-            resp = http.post(
-                ACCOUNT_DELETE_URL,
-                json={"id": user["id"], "token": user["token"]},
-                timeout=10
-            )
-            # Проверяем успешный ответ (сервер возвращает 200 без тела)
-            if resp.status_code == 200:
-                # Удаляем локальные данные
-                from app.components.database import delete_user_and_contacts
-                delete_user_and_contacts(db_path)
-                page.go('/login')
-            else:
-                # Обрабатываем ошибки от сервера
-                try:
-                    body = resp.json()
-                    error_msg = body.get("error", "Ошибка при удалении")
-                except:
-                    error_msg = "Не удалось удалить аккаунт"
-                
-                page.snack_bar = ft.SnackBar(
-                    ft.Text(f"Ошибка: {error_msg}"),
-                    open=True,
-                )
-                page.update()
-        except Exception as ex:
-            page.snack_bar = ft.SnackBar(
-                ft.Text(f"Ошибка сети: {str(ex)[:100]}"), open=True
-            )
-            page.update()
-
-    delete_btn = ft.OutlinedButton(
-        icon=ft.Icons.DELETE_FOREVER,
-        style=ft.ButtonStyle(color=ft.Colors.RED),
-        on_click=_delete_account,
-    )
-
-    # ── Сборка ─────────────────────────────────────────────────────────────
-
-    content = ft.Column(
-        controls=[
-            profile_header,
-            ft.Divider(height=1),
-            ft.Container(
-                content=ft.Column(
-                    [
-                        theme_row,
-                        ft.Divider(height=1, color=ft.Colors.OUTLINE_VARIANT),
-                        font_row,
-                        ft.Divider(height=1, color=ft.Colors.OUTLINE_VARIANT),
-                        ft.Container(
-                            content=ft.Row(
-                                [
-                                    danger_icon,
-                                    danger_title,
-                                    ft.Container(expand=True),
-                                    delete_btn,
-                                ],
-                                spacing=14,
-                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                            ),
-                            padding=ft.padding.symmetric(horizontal=16, vertical=12),
-                        ),
-                    ],
-                    spacing=0,
-                ),
-                margin=ft.margin.symmetric(horizontal=8, vertical=8),
-                border_radius=14,
-                border=ft.border.all(1, ft.Colors.OUTLINE_VARIANT),
-            ),
-        ],
-        expand=True,
-        spacing=0,
-        scroll=ft.ScrollMode.ADAPTIVE,
-    )
-
-    appbar = ft.AppBar(
-        leading=ft.IconButton(ft.Icons.CHEVRON_LEFT, on_click=lambda _: page.go("/")),
-        leading_width=40,
-        title=ft.Text("Настройки", color=colors["title"]),
-        center_title=False,
-        bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
-    )
-
-    return ft.View(
-        "/settings",
-        appbar=appbar,
-        controls=[content],
-    )
 
 //app/components/database.py
 import sqlite3 as sql
@@ -1456,14 +624,14 @@ def init_database(db_path: str):
         cur.execute("""
             CREATE TABLE IF NOT EXISTS users_data(
                 id_user INTEGER, name TEXT, profile TEXT,
-                number TEXT, token TEXT, avatar TEXT)
+                number TEXT, token TEXT, room TEXT, avatar TEXT)
         """)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS contacts(
                 user_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT, username_save TEXT, status TEXT,
                 phone TEXT, status_user_contact TEXT,
-                redacted_username TEXT, avatar TEXT)
+                redacted_username TEXT, room TEXT, avatar TEXT)
         """)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS chats(
@@ -1672,6 +840,9 @@ def get_contact_id_by_chat(db_path: str, chat_id: int):
         row = cur.fetchone()
         return row[0] if row else None
 
+
+
+
 //app/components/dialogs.py
 import flet as ft
 
@@ -1779,6 +950,9 @@ def create_contact_dialog():
 
     return (dialog, contact_list, search_field, loading_container,
             search_result_container, not_saved_col, saved_col, delete_btn_row)
+
+
+
 
 //app/components/handlers.py
 import threading
@@ -2257,169 +1431,6 @@ def setup_handlers(page, db_path, contacts, chats,
         'soon_popup':                lambda e: _soon_dialog(page),
     }
 
-//app/components/ui_components.py
-import flet as ft
-from .utils import get_avatar_letter, format_chat_time, format_phone
-
-
-def create_contact_item(contact: dict, on_click_handler) -> ft.Container:
-    status = contact.get("status_user_contact", "save_user")
-    if status == "not_save_user":
-        display_name = format_phone(contact.get("phone", "")) or contact["username"]
-        avatar_letter, avatar_bg = "#", ft.Colors.BLUE_GREY
-    else:
-        display_name = contact["username"]
-        avatar_letter = get_avatar_letter(contact["username"])
-        avatar_bg = ft.Colors.GREEN
-
-    return ft.Container(
-        content=ft.ListTile(
-            leading=ft.Container(
-                content=ft.Text(avatar_letter, size=16, weight=ft.FontWeight.BOLD,
-                                color=ft.Colors.WHITE),
-                width=50, height=50, border_radius=25,
-                bgcolor=avatar_bg, alignment=ft.alignment.center,
-            ),
-            title=ft.Text(display_name, weight=ft.FontWeight.BOLD, size=16,
-                          overflow=ft.TextOverflow.ELLIPSIS, max_lines=1),
-            subtitle=ft.Text(contact.get("status", ""), size=14, color=ft.Colors.GREY,
-                             overflow=ft.TextOverflow.ELLIPSIS, max_lines=1),
-            trailing=ft.Icon(ft.Icons.CHAT, color=ft.Colors.BLUE),
-            on_click=on_click_handler,
-        ),
-        padding=ft.padding.symmetric(horizontal=5, vertical=2),
-        border_radius=10,
-        on_click=on_click_handler,
-    )
-
-
-def create_chat_item(chat: dict, on_click_handler, on_menu_handler=None,
-                     contact_status="save_user") -> ft.Container:
-    """Элемент чата с меню ⋮."""
-    chat_id    = chat["id"]
-    is_fav     = chat.get("is_favorite", False)
-    fav_label  = "Убрать из избранного" if is_fav else "Добавить в избранное"
-    fav_icon   = ft.Icons.STAR_OUTLINE if is_fav else ft.Icons.STAR
-
-    time_badge = ft.Column(
-        controls=[
-            ft.Text(format_chat_time(chat["last_time"]), size=12, color=ft.Colors.GREY),
-            *([ ft.Icon(ft.Icons.STAR, color=ft.Colors.AMBER, size=14) ] if is_fav else []),
-            *([ ft.Container(
-                content=ft.Text(str(chat["unread"]), color=ft.Colors.WHITE, size=12,
-                                weight=ft.FontWeight.BOLD),
-                bgcolor=ft.Colors.GREEN, border_radius=20,
-                padding=ft.padding.all(5),
-            ) ] if chat["unread"] > 0 else []),
-        ],
-        horizontal_alignment=ft.CrossAxisAlignment.END,
-        spacing=3,
-    )
-
-    contact_item = (
-        ft.PopupMenuItem(
-            content=ft.Row([ft.Icon(ft.Icons.PERSON_ADD, size=18), ft.Text("Сохранить контакт")], spacing=8),
-            on_click=lambda e: on_menu_handler(chat_id, "save_contact") if on_menu_handler else None,
-        ) if contact_status == "not_save_user" else
-        ft.PopupMenuItem(
-            content=ft.Row([ft.Icon(ft.Icons.EDIT, size=18), ft.Text("Изменить контакт")], spacing=8),
-            on_click=lambda e: on_menu_handler(chat_id, "edit_contact") if on_menu_handler else None,
-        )
-    )
-
-    menu = ft.PopupMenuButton(
-        icon=ft.Icons.MORE_VERT,
-        icon_color=ft.Colors.ON_SURFACE,
-        items=[
-            ft.PopupMenuItem(
-                content=ft.Row([ft.Icon(fav_icon, size=18, color=ft.Colors.AMBER),
-                                ft.Text(fav_label)], spacing=8),
-                on_click=lambda e: on_menu_handler(chat_id, "favorite") if on_menu_handler else None,
-            ),
-            contact_item,
-            ft.PopupMenuItem(),
-            ft.PopupMenuItem(
-                content=ft.Row([ft.Icon(ft.Icons.DELETE_OUTLINE, size=18, color=ft.Colors.RED),
-                                ft.Text("Удалить чат", color=ft.Colors.RED)], spacing=8),
-                on_click=lambda e: on_menu_handler(chat_id, "delete") if on_menu_handler else None,
-            ),
-        ],
-    )
-
-    return ft.Container(
-        content=ft.Row(
-            controls=[
-                ft.ListTile(
-                    leading=ft.Container(
-                        content=ft.Text(get_avatar_letter(chat["name"]), size=16,
-                                        weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
-                        width=50, height=50, border_radius=25,
-                        bgcolor=ft.Colors.BLUE, alignment=ft.alignment.center,
-                    ),
-                    title=ft.Text(chat["name"], weight=ft.FontWeight.BOLD, size=16,
-                                  overflow=ft.TextOverflow.ELLIPSIS, max_lines=1),
-                    subtitle=ft.Text(chat["last_message"] or "Нет сообщений",
-                                     size=14, color=ft.Colors.GREY,
-                                     overflow=ft.TextOverflow.ELLIPSIS, max_lines=1),
-                    trailing=time_badge,
-                    on_click=lambda e: on_click_handler(chat_id),
-                    expand=True,
-                ),
-                menu,
-            ],
-            spacing=0,
-            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-        ),
-        padding=ft.padding.only(left=5, right=0, top=2, bottom=2),
-        border_radius=10,
-        ink=True,
-    )
-
-//app/components/utils.py
-from datetime import datetime
-
-
-# Таблица транслитерации кириллицы
-_CYR_TO_LAT = {
-    'А': 'A', 'Б': 'B', 'В': 'V', 'Г': 'G', 'Д': 'D',
-    'Е': 'E', 'Ё': 'E', 'Ж': 'Z', 'З': 'Z', 'И': 'I',
-    'Й': 'I', 'К': 'K', 'Л': 'L', 'М': 'M', 'Н': 'N',
-    'О': 'O', 'П': 'P', 'Р': 'R', 'С': 'S', 'Т': 'T',
-    'У': 'U', 'Ф': 'F', 'Х': 'H', 'Ц': 'C', 'Ч': 'C',
-    'Ш': 'S', 'Щ': 'S', 'Ъ': '', 'Ы': 'Y', 'Ь': '',
-    'Э': 'E', 'Ю': 'U', 'Я': 'Y',
-}
-
-
-def format_phone(number: str) -> str:
-    """Форматирует номер телефона в вид +7 (XXX) XXX-XX-XX."""
-    if not number:
-        return ""
-    digits = ''.join(filter(str.isdigit, str(number)))
-    if len(digits) == 11:
-        digits = digits[1:]
-    if len(digits) == 10:
-        return f"+7 ({digits[0:3]}) {digits[3:6]}-{digits[6:8]}-{digits[8:10]}"
-    return str(number)
-
-
-def get_avatar_letter(name: str) -> str:
-    """Возвращает латинскую букву для аватара по первому символу имени."""
-    if not name:
-        return "U"
-    ch = name[0].upper()
-    return _CYR_TO_LAT.get(ch, ch if ch.isalpha() else 'U')
-
-
-def format_chat_time(time_string: str) -> str:
-    """Форматирует строку даты-времени в HH:MM."""
-    if not time_string:
-        return ""
-    try:
-        fmt = '%Y-%m-%d %H:%M:%S.%f' if '.' in time_string else '%Y-%m-%d %H:%M:%S'
-        return datetime.strptime(time_string, fmt).strftime('%H:%M')
-    except ValueError:
-        return ""
 
 
 //app/components/chat/chat_connection.py
@@ -2428,13 +1439,15 @@ import base64
 import threading
 import queue
 import websocket
+import sqlite3 as ql
+import path
 from .geniration_token import GuaranteedUniqueTokenGenerator
 
 # ── Генерация токенов ─────────────────────────────────────────────────────────
 
 _gen   = GuaranteedUniqueTokenGenerator()
 token  = _gen.generate_token(90)
-lobbi  = _gen.generate_token(90)
+lobbi_new  = _gen.generate_token(90)
 
 # ── Константы ─────────────────────────────────────────────────────────────────
 
@@ -2442,28 +1455,91 @@ WS_URL_DATA     = "ws://127.0.0.1:5000/ws/data/"
 WS_URL_CHAT     = f"ws://127.0.0.1:5000/ws/chat_user/{token}/"
 WS_URL_NEW_CHAT = f"ws://127.0.0.1:5000/ws/new_chat_user/{token}/"
 FILE_SEPARATOR  = b"|||BINARY_DATA|||"
-LOBBI_TIME      = "lobbi1"
+
+# ── Путь к БД ─────────────────────────────────────────────────────────────────
+
+db_path = f"{path.db_path()}user_data.db"
 
 # ── Состояние ─────────────────────────────────────────────────────────────────
 
 message_queue: queue.Queue = queue.Queue()
 ws: websocket.WebSocket | None = None
 running = True
+LOBBI_TIME = None
+
+
+# ── Вспомогательные функции БД ────────────────────────────────────────────────
+
+def get_room_by_contact(contact_id: str) -> str | None:
+    """Ищет комнату по contact_id в таблице contacts"""
+    try:
+        with ql.connect(db_path) as con:
+            cur = con.cursor()
+            cur.execute("SELECT room FROM contacts WHERE user_id = ?", (str(contact_id),))
+            row = cur.fetchone()
+            if row and row[0]:
+                return row[0]
+        return None
+    except Exception as e:
+        print(f"[БД] Ошибка чтения комнаты: {e}")
+        return None
+
+
+def save_room_for_contact(my_id: str, contact_id: str, room: str):
+    """Сохраняет или создаёт запись с комнатой в contacts для обоих пользователей"""
+    try:
+        with ql.connect(db_path) as con:
+            cur = con.cursor()
+            
+            for uid in (str(my_id), str(contact_id)):
+                cur.execute("SELECT user_id FROM contacts WHERE user_id = ?", (uid,))
+                if cur.fetchone():
+                    # Запись есть - обновляем комнату
+                    cur.execute("UPDATE contacts SET room = ? WHERE user_id = ?", (room, uid))
+                    print(f"[БД] Обновлена комната для user_id={uid}")
+                else:
+                    # Записи нет - создаём с комнатой
+                    cur.execute(
+                        "INSERT INTO contacts (user_id, room, status_user_contact) VALUES (?, ?, 'not_save_user')",
+                        (uid, room)
+                    )
+                    print(f"[БД] Создана запись для user_id={uid} с комнатой {room}")
+            
+            con.commit()
+            print(f"[БД] Комната {room} сохранена")
+    except Exception as e:
+        print(f"[БД] Ошибка сохранения комнаты: {e}")
 
 
 # ── Публичный API ─────────────────────────────────────────────────────────────
 
 def start_connection(my_id: str, contact_id: str, status_chat: str):
     """Аутентифицирует чат-комнату, открывает WS и запускает поток чтения."""
-    print(my_id, contact_id, status_chat)
-    global ws
+    global ws, LOBBI_TIME
+    
+    print(f"[ЧАТ] my_id={my_id}, contact_id={contact_id}, status_chat={status_chat}")
+    
     try:
+        if status_chat == 'existing_chat':
+            LOBBI_TIME = get_room_by_contact(contact_id)
+            if not LOBBI_TIME:
+                print("[ЧАТ] ❌ Комната не найдена для контакта")
+                return
+            print(f"[ЧАТ] Комната из БД: {LOBBI_TIME}")
+        else:
+            LOBBI_TIME = lobbi_new
+            save_room_for_contact(my_id, contact_id, LOBBI_TIME)
+            print(f"[ЧАТ] Новая комната: {LOBBI_TIME}")
+        
         _authenticate(my_id, contact_id, status_chat)
+        
         ws = websocket.WebSocket()
         ws.connect(WS_URL_NEW_CHAT if status_chat == 'new_chat' else WS_URL_CHAT)
         threading.Thread(target=_receive_loop, daemon=True).start()
-    except Exception:
-        pass
+        print(f"[ЧАТ] ✅ Подключен к {LOBBI_TIME}")
+        
+    except Exception as e:
+        print(f"[ЧАТ] ❌ Ошибка подключения: {e}")
 
 
 def send_text(payload: dict):
@@ -2491,13 +1567,16 @@ def _authenticate(my_id: str, contact_id: str, status_chat: str):
             "status_chat": status_chat,
             "token":       token,
         }))
-        conn.close()#LOBBI_TIME if status_chat == 'existing_chat' else lobbi,
-    except Exception:
-        pass
+        response = conn.recv()
+        print(f"[АВТОРИЗАЦИЯ] {response}")
+        conn.close()
+    except Exception as e:
+        print(f"[АВТОРИЗАЦИЯ] ❌ Ошибка: {e}")
 
 
 def _receive_loop():
     global running
+    print("[ЧАТ] Слушаю входящие сообщения...")
     while running:
         try:
             raw = ws.recv()
@@ -2506,7 +1585,6 @@ def _receive_loop():
             elif isinstance(raw, bytes):
                 sep = raw.find(FILE_SEPARATOR)
                 if sep == -1:
-                    print("❌ Разделитель не найден в бинарных данных")
                     continue
                 meta  = json.loads(raw[:sep].decode("utf-8"))
                 fbytes = raw[sep + len(FILE_SEPARATOR):]
@@ -2519,11 +1597,23 @@ def _receive_loop():
                     "sender_id": meta.get("sender_id"),
                 })
         except websocket.WebSocketConnectionClosedException:
-            print("❌ WebSocket соединение закрыто")
+            print("[ЧАТ] Соединение закрыто")
             break
         except Exception as e:
-            print(f"❌ Ошибка получения: {e}")
+            print(f"[ЧАТ] ❌ Ошибка получения: {e}")
             break
+
+
+def close():
+    global running, ws
+    running = False
+    if ws:
+        try:
+            ws.close()
+        except:
+            pass
+    print("[ЧАТ] Соединение закрыто")
+
 
 
 //app/components/chat/chat_db.py
@@ -2653,6 +1743,79 @@ def delete_messages_for_chat(chat_id: int):
         con.commit()
 
 
+def delete_single_message(msg_db_id: int):
+    """Удаляет одно сообщение и обновляет last_message чата."""
+    with sql.connect(_db_path) as con:
+        cur = con.cursor()
+        # Узнаём chat_id удаляемого сообщения
+        cur.execute("SELECT chat_id FROM messages WHERE id = ?", (msg_db_id,))
+        row = cur.fetchone()
+        chat_id = row[0] if row else None
+
+        cur.execute("DELETE FROM messages WHERE id = ?", (msg_db_id,))
+        con.commit()
+
+        # Обновляем last_message: берём последнее оставшееся сообщение
+        if chat_id:
+            cur.execute("""
+                SELECT content, file_name, timestamp FROM messages
+                WHERE chat_id = ?
+                ORDER BY id DESC LIMIT 1
+            """, (chat_id,))
+            last = cur.fetchone()
+            if last:
+                preview = last[0] if last[0] else (last[1] or "Медиафайл")
+                if len(preview) > 80:
+                    preview = preview[:77] + "..."
+                cur.execute(
+                    "UPDATE chats SET last_message = ?, last_message_time = ? WHERE chat_id = ?",
+                    (preview, last[2], chat_id)
+                )
+            else:
+                cur.execute(
+                    "UPDATE chats SET last_message = NULL, last_message_time = NULL WHERE chat_id = ?",
+                    (chat_id,)
+                )
+            con.commit()
+
+
+def update_message_content(msg_db_id: int, new_content: str):
+    """Обновляет текст сообщения и last_message чата если это последнее сообщение."""
+    with sql.connect(_db_path) as con:
+        cur = con.cursor()
+        # Узнаём chat_id сообщения
+        cur.execute("SELECT chat_id FROM messages WHERE id = ?", (msg_db_id,))
+        row = cur.fetchone()
+        chat_id = row[0] if row else None
+
+        cur.execute(
+            "UPDATE messages SET content = ? WHERE id = ?",
+            (new_content, msg_db_id)
+        )
+        con.commit()
+
+        # Если это последнее сообщение чата — обновляем превью
+        if chat_id:
+            cur.execute("""
+                SELECT id FROM messages
+                WHERE chat_id = ?
+                ORDER BY id DESC LIMIT 1
+            """, (chat_id,))
+            last_row = cur.fetchone()
+            if last_row and last_row[0] == msg_db_id:
+                preview = new_content if new_content else "Медиафайл"
+                if len(preview) > 80:
+                    preview = preview[:77] + "..."
+                cur.execute(
+                    "UPDATE chats SET last_message = ? WHERE chat_id = ?",
+                    (preview, chat_id)
+                )
+                con.commit()
+
+
+
+
+
 //app/components/chat/chat_manager.py
 """Глобальное состояние текущего чата (chat_id и status_chat)."""
 
@@ -2677,7 +1840,11 @@ def set_status_chat(value):
 def get_status_chat():
     return _status_chat
 
-//app/components/chat/ui_components.py
+
+
+
+
+//app/components/chat/chat_ui.py
 import flet as ft
 import datetime
 import os
@@ -2786,7 +1953,7 @@ class ChatUI:
         self.page         = page
         self.CURRENT_USER = current_user
         self.CONTACT_USER = contact_user
-        self.chat_id      = chat_id  # ID текущего чата для сохранения истории
+        self.chat_id      = chat_id
 
         self.messages_column  = ft.Column(scroll=ft.ScrollMode.ALWAYS, expand=True)
         self.all_messages:     list = []
@@ -2802,7 +1969,6 @@ class ChatUI:
         self._menu_block_item_ref  = ft.Ref[ft.PopupMenuItem]()
         self._popup_btn_ref        = ft.Ref[ft.PopupMenuButton]()
 
-        # Инициализируем таблицу сообщений (на случай если её ещё нет)
         try:
             db_ops.init_messages_table()
         except Exception as ex:
@@ -2814,7 +1980,6 @@ class ChatUI:
         self._build_input_bar()
         self._build_header()
 
-        # Загружаем историю сообщений из БД
         self._load_history()
 
     # ── Настройки ─────────────────────────────────────────────────────────────
@@ -2837,7 +2002,6 @@ class ChatUI:
     # ── История сообщений ─────────────────────────────────────────────────────
 
     def _load_history(self):
-        """Загружает все сообщения чата из БД и отображает их."""
         if not self.chat_id:
             return
         try:
@@ -2851,7 +2015,6 @@ class ChatUI:
             print(f"❌ Ошибка загрузки истории: {ex}")
 
     def _restore_message_widget(self, m: dict):
-        """Восстанавливает виджет сообщения из сохранённых данных."""
         mt       = m["msg_type"]
         is_user  = m["is_user"]
         one_time = m["one_time"]
@@ -2860,7 +2023,7 @@ class ChatUI:
             if mt == "text":
                 return self.create_text_message(
                     m["content"] or "", is_user=is_user, quote=m.get("quote_text"),
-                    saved_time=m["timestamp"]
+                    saved_time=m["timestamp"], db_msg_id=m["id"]
                 )
             elif mt == "image":
                 fp = m["file_path"] or ""
@@ -2898,12 +2061,11 @@ class ChatUI:
             print(f"❌ Ошибка восстановления сообщения: {ex}")
         return None
 
-    def _save_text_msg(self, text: str, is_user: bool, quote: str = None):
-        """Сохраняет текстовое сообщение в БД."""
+    def _save_text_msg(self, text: str, is_user: bool, quote: str = None) -> int | None:
         if not self.chat_id:
-            return
+            return None
         try:
-            db_ops.save_message(
+            return db_ops.save_message(
                 chat_id=self.chat_id,
                 sender_id=self.CURRENT_USER["id"] if is_user else self.CONTACT_USER["id"],
                 msg_type="text",
@@ -2913,10 +2075,10 @@ class ChatUI:
             )
         except Exception as ex:
             print(f"❌ Ошибка сохранения текста: {ex}")
+            return None
 
     def _save_file_msg(self, file_path: str, file_name: str, msg_type: str,
                        is_user: bool, one_time: bool = False):
-        """Сохраняет файловое сообщение в БД."""
         if not self.chat_id:
             return
         try:
@@ -2947,13 +2109,19 @@ class ChatUI:
         self.page.update()
 
     def scroll_to_bottom(self):
-        self.messages_column.scroll_to(offset=-1, duration=300)
+        try:
+            self.messages_column.scroll_to(offset=-1, duration=300)
+        except AssertionError:
+            pass
 
     def add_message_to_chat(self, widget):
         self.messages_column.controls.append(widget)
         self.all_messages.append(widget)
-        self.scroll_to_bottom()
-        self.page.update()
+        try:
+            self.scroll_to_bottom()
+            self.page.update()
+        except AssertionError:
+            pass
 
     # ── Панель ответа ─────────────────────────────────────────────────────────
 
@@ -3082,7 +2250,8 @@ class ChatUI:
     # ── Контекстное меню сообщения ────────────────────────────────────────────
 
     def show_message_menu(self, msg_widget, text: str, is_user: bool,
-                          msg_text_ref=None, edited_tag=None, current_text=None):
+                          msg_text_ref=None, edited_tag=None, current_text=None,
+                          db_msg_id: int = None):
         def close(e): self.page.close(dlg)
 
         def copy(e):
@@ -3095,7 +2264,7 @@ class ChatUI:
             self.page.close(dlg)
 
         def delete(e):
-            self.delete_message(msg_widget, text)
+            self.delete_message(msg_widget, text, db_msg_id=db_msg_id)
             self.page.close(dlg)
 
         def edit(e):
@@ -3113,6 +2282,11 @@ class ChatUI:
                 edited_tag.value           = "изменено"
                 msg_text_ref.current.update()
                 edited_tag.update()
+                if db_msg_id:
+                    try:
+                        db_ops.update_message_content(db_msg_id, new_text)
+                    except Exception as ex:
+                        print(f"❌ Ошибка обновления в БД: {ex}")
                 try:
                     conn.send_text({
                         "type":      "edit",
@@ -3149,7 +2323,7 @@ class ChatUI:
         )
         self.page.open(dlg)
 
-    def delete_message(self, widget, text: str = ""):
+    def delete_message(self, widget, text: str = "", db_msg_id: int = None):
         if widget not in self.messages_column.controls:
             return
         try:
@@ -3160,13 +2334,23 @@ class ChatUI:
                 "sender_id":    self.CURRENT_USER["id"],
                 "timestamp":    datetime.datetime.now().timestamp(),
             })
+        except Exception:
+            pass
+
+        if db_msg_id:
+            try:
+                db_ops.delete_single_message(db_msg_id)
+            except Exception as ex:
+                print(f"❌ Ошибка удаления из БД: {ex}")
+
+        try:
             self.messages_column.controls.remove(widget)
             if widget in self.all_messages:
                 self.all_messages.remove(widget)
             self.messages_column.update()
-            self.show_snack("✅ Сообщение удалено у всех")
-        except Exception as e:
-            print(f"❌ Ошибка удаления: {e}")
+            self.show_snack("✅ Сообщение удалено")
+        except Exception as ex:
+            print(f"❌ Ошибка удаления с экрана: {ex}")
 
     # ── Стили пузырей ─────────────────────────────────────────────────────────
 
@@ -3190,7 +2374,8 @@ class ChatUI:
 
     def create_text_message(self, text: str, is_user: bool = True,
                             quote: str | None = None,
-                            saved_time: str = None) -> ft.GestureDetector:
+                            saved_time: str = None,
+                            db_msg_id: int = None) -> ft.GestureDetector:
         user_data = self.CURRENT_USER if is_user else self.CONTACT_USER
         children  = []
 
@@ -3213,7 +2398,6 @@ class ChatUI:
         edited_tag   = ft.Text("", size=10, color=ft.Colors.WHITE54, italic=True)
         current_text = [text]
 
-        # Время: из сохранённой записи или текущее
         display_time = _now_hm()
         if saved_time:
             try:
@@ -3241,7 +2425,8 @@ class ChatUI:
             self.show_message_menu(widget, current_text[0], is_user,
                                    msg_text_ref=msg_ref,
                                    edited_tag=edited_tag,
-                                   current_text=current_text)
+                                   current_text=current_text,
+                                   db_msg_id=db_msg_id)
 
         widget = ft.GestureDetector(content=row, on_tap=open_menu,
                                     on_long_press_start=open_menu)
@@ -3573,9 +2758,10 @@ class ChatUI:
         if not text or self.is_blocked[0]:
             return
         quote = self.reply_to[0]
-        # Сохраняем в БД
-        self._save_text_msg(text, is_user=True, quote=quote)
-        self.add_message_to_chat(self.create_text_message(text, is_user=True, quote=quote))
+        db_id = self._save_text_msg(text, is_user=True, quote=quote)
+        self.add_message_to_chat(
+            self.create_text_message(text, is_user=True, quote=quote, db_msg_id=db_id)
+        )
         try:
             conn.send_text({
                 "type":      "message",
@@ -3684,8 +2870,11 @@ class ChatUI:
         self.messages_column.controls.append(widget)
         self.all_messages.append(widget)
         self.sent_media_files.append({"name": name, "type": e, "path": saved_path})
-        self.scroll_to_bottom()
-        self.page.update()
+        try:
+            self.scroll_to_bottom()
+            self.page.update()
+        except AssertionError:
+            pass
 
     # ── Входящие сообщения ────────────────────────────────────────────────────
 
@@ -3738,12 +2927,20 @@ class ChatUI:
                     in_quote = msg.get("reply_to")
                     if (text and sender_id == self.CONTACT_USER["id"]
                             and not self.is_blocked[0]):
-                        # Сохраняем входящее текстовое сообщение
-                        self._save_text_msg(text, is_user=False, quote=in_quote)
-                        self.add_message_to_chat(
-                            self.create_text_message(text, is_user=False, quote=in_quote))
+                        db_id = self._save_text_msg(text, is_user=False, quote=in_quote)
+                        widget = self.create_text_message(text, is_user=False,
+                                                          quote=in_quote, db_msg_id=db_id)
+                        self.messages_column.controls.append(widget)
+                        self.all_messages.append(widget)
         except queue.Empty:
             pass
+        
+        try:
+            self.messages_column.update()
+            self.scroll_to_bottom()
+        except AssertionError:
+            pass
+        
         threading.Timer(0.5, self.poll_queue).start()
 
     # ── Голосовые сообщения ───────────────────────────────────────────────────
@@ -4167,7 +3364,6 @@ class ChatUI:
 
     def clear_all_chat(self):
         def confirm(e):
-            # Удаляем сообщения из БД
             if self.chat_id:
                 try:
                     db_ops.delete_messages_for_chat(self.chat_id)
@@ -4180,7 +3376,6 @@ class ChatUI:
             self.messages_column.update()
             self.page.close(dlg)
 
-            # Удаляем медиафайлы с диска
             for folder in (ASSETS_FOLDER, INCOMING_FOLDER, VOICE_FOLDER):
                 if os.path.exists(folder):
                     for filename in os.listdir(folder):
@@ -4202,23 +3397,3 @@ class ChatUI:
             ],
         )
         self.page.open(dlg)
-
-//app/components/chat/geniration_token.py
-import random
-import string
-import time
-
-
-class GuaranteedUniqueTokenGenerator:
-    """Генератор гарантированно уникальных токенов."""
-
-    def __init__(self):
-        self._used: set = set()
-
-    def generate_token(self, length: int = 90) -> str:
-        chars = string.ascii_letters + string.digits
-        while True:
-            token = ''.join(random.choices(chars, k=length))
-            if token not in self._used:
-                self._used.add(token)
-                return token

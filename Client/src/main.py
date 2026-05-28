@@ -4,6 +4,7 @@ import path
 import websocket
 import json
 import threading
+import requests
 from app.menu import main_menu
 from app.settings import settings_view
 from app.registration import main_registartion
@@ -13,6 +14,7 @@ from app.chat import chat_view
 db_path = f"{path.db_path()}user_data.db"
 
 WS_HOST = "ws://127.0.0.1:5000"
+API_HOST = "http://127.0.0.1:5000"
 
 ws_notification = None
 notification_thread = None
@@ -69,6 +71,46 @@ def get_user_data():
         return None
 
 
+def check_offline_messages():
+    """Проверяет офлайн-сообщения через REST API"""
+    user_data = get_user_data()
+    if not user_data:
+        print("[ОФЛАЙН] Нет данных пользователя")
+        return
+    
+    try:
+        response = requests.post(
+            f"{API_HOST}/notification/v2/user/notification/",
+            json={
+                "id_users": user_data["user_id"],
+                "token": user_data["token"]
+            }
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            if isinstance(data, list):
+                print(f"\n{'='*50}")
+                print(f"  📬 ОФЛАЙН-СООБЩЕНИЯ ({len(data)} шт.)")
+                print(f"{'='*50}")
+                for msg in data:
+                    print(f"  От: User {msg.get('id_senders', '?')}")
+                    print(f"  Комната: {msg.get('room', '?')}")
+                    print(f"  Сообщение: {msg.get('message', '')}")
+                    print(f"  Статус: {msg.get('status_chat', '?')}")
+                    print(f"  Время: {msg.get('timestamp', '?')}")
+                    print(f"{'─'*40}")
+            elif isinstance(data, dict) and data.get("message") == "no message":
+                print("[ОФЛАЙН] Нет новых сообщений")
+            else:
+                print(f"[ОФЛАЙН] Ответ: {data}")
+        else:
+            print(f"[ОФЛАЙН] Ошибка: {response.status_code}")
+            
+    except Exception as e:
+        print(f"[ОФЛАЙН] Ошибка запроса: {e}")
+
+
 def connect_notifications(user_id, notification_room):
     global ws_notification, notification_thread
     
@@ -115,12 +157,18 @@ def disconnect_notifications():
 
 def init_notifications():
     if not is_authorized:
+        print("[УВЕДОМЛЕНИЯ] Пользователь не авторизован")
         return
     
     user_data = get_user_data()
     if not user_data:
+        print("[УВЕДОМЛЕНИЯ] Нет данных пользователя в БД")
         return
     
+    # Сначала проверяем офлайн-сообщения
+    check_offline_messages()
+    
+    # Потом подключаем уведомления
     connect_notifications(user_data["user_id"], user_data["room"])
 
 

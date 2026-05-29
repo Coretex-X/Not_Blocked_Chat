@@ -74,7 +74,13 @@ def start_connection(my_id: str, contact_id: str, status_chat: str):
     """Закрывает предыдущее соединение, аутентифицирует и открывает новое."""
     global ws, LOBBI_TIME, running, _stop_event
 
-    # FIX 1: перед новым подключением всегда закрываем старое
+    # Защита от двойного вызова: если уже подключены к той же комнате — пропускаем
+    if running and ws and LOBBI_TIME:
+        expected_room = get_room_by_contact(contact_id) if status_chat == 'existing_chat' else None
+        if expected_room and expected_room == LOBBI_TIME:
+            print(f"[ЧАТ] Уже подключен к {LOBBI_TIME}, пропускаем")
+            return
+
     stop_connection()
 
     print(f"[ЧАТ] my_id={my_id}, contact_id={contact_id}, status_chat={status_chat}")

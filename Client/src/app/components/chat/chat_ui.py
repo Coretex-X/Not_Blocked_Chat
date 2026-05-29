@@ -114,7 +114,6 @@ class ChatUI:
         self.viewed_once_ids:  list = []
 
         self.reply_to         = [None]
-        self.is_blocked       = [False]
         self.auto_save_folder = [None]
         self.recording_start  = [None]
 
@@ -128,6 +127,9 @@ class ChatUI:
         except Exception as ex:
             print(f"❌ init_messages_table: {ex}")
 
+        # Загружаем состояние блокировки из БД
+        self.is_blocked = [self._read_blocked_from_db()]
+
         self._load_settings()
         self._build_reply_bar()
         self._build_voice_panel()
@@ -136,6 +138,47 @@ class ChatUI:
 
         # Загружаем историю сообщений из БД
         self._load_history()
+
+    # ── Блокировка ────────────────────────────────────────────────────────────
+
+    def _read_blocked_from_db(self) -> bool:
+        """Читает состояние блокировки контакта из БД."""
+        try:
+            db_path = f"{path.db_path()}user_data.db"
+            cid = self.CONTACT_USER.get("id")
+            if not cid:
+                return False
+            with sql.connect(db_path) as con:
+                cur = con.cursor()
+                # Добавляем колонку если её ещё нет (миграция)
+                try:
+                    cur.execute("ALTER TABLE contacts ADD COLUMN is_blocked INTEGER DEFAULT 0")
+                    con.commit()
+                except sql.OperationalError:
+                    pass
+                cur.execute("SELECT is_blocked FROM contacts WHERE user_id = ?", (cid,))
+                row = cur.fetchone()
+                return bool(row[0]) if row and row[0] else False
+        except Exception as ex:
+            print(f"❌ Чтение блокировки: {ex}")
+            return False
+
+    def _write_blocked_to_db(self, blocked: bool):
+        """Сохраняет состояние блокировки контакта в БД."""
+        try:
+            db_path = f"{path.db_path()}user_data.db"
+            cid = self.CONTACT_USER.get("id")
+            if not cid:
+                return
+            with sql.connect(db_path) as con:
+                cur = con.cursor()
+                cur.execute(
+                    "UPDATE contacts SET is_blocked = ? WHERE user_id = ?",
+                    (1 if blocked else 0, cid)
+                )
+                con.commit()
+        except Exception as ex:
+            print(f"❌ Запись блокировки: {ex}")
 
     # ── Настройки ─────────────────────────────────────────────────────────────
 
@@ -167,8 +210,19 @@ class ChatUI:
                 if widget:
                     self.messages_column.controls.append(widget)
                     self.all_messages.append(widget)
+            # Скроллим вниз после загрузки — с задержкой чтобы страница успела отрисоваться
+            if messages:
+                threading.Timer(0.3, self._scroll_after_load).start()
         except Exception as ex:
             print(f"❌ Ошибка загрузки истории: {ex}")
+
+    def _scroll_after_load(self):
+        """Прокручивает в конец после того как история загружена и отрисована."""
+        try:
+            self.scroll_to_bottom(animated=False)
+            self.page.update()
+        except Exception:
+            pass
 
     def _restore_message_widget(self, m: dict):
         """Восстанавливает виджет сообщения из сохранённых данных."""
@@ -219,32 +273,13 @@ class ChatUI:
         return None
 
     def _save_text_msg(self, text: str, is_user: bool, quote: str = None) -> int | None:
-        """Сохраняет текстовое сообщение в БД. Возвращает id записи или None если дубликат."""
+        """Сохраняет текстовое сообщение в БД. Возвращает id записи."""
         if not self.chat_id:
             return None
         try:
-            # FIX 4: проверяем дедупликацию — если такое же сообщение уже есть
-            # за последние 3 секунды от того же отправителя, не сохраняем
-            import sqlite3 as _sql
-            import path as _path
-            _db = f"{_path.db_path()}user_data.db"
-            sender_id = self.CURRENT_USER["id"] if is_user else self.CONTACT_USER["id"]
-            with _sql.connect(_db) as _con:
-                _cur = _con.cursor()
-                _cur.execute("""
-                    SELECT id FROM messages
-                    WHERE chat_id = ? AND content = ? AND sender_id = ?
-                      AND is_user = ?
-                      AND datetime(timestamp) >= datetime('now', '-3 seconds')
-                    LIMIT 1
-                """, (self.chat_id, text, sender_id, 1 if is_user else 0))
-                if _cur.fetchone():
-                    print(f"[ДЕДУПЛИКАЦИЯ] Пропускаем дубликат: {text[:30]}")
-                    return None
-
             return db_ops.save_message(
                 chat_id=self.chat_id,
-                sender_id=sender_id,
+                sender_id=self.CURRENT_USER["id"] if is_user else self.CONTACT_USER["id"],
                 msg_type="text",
                 content=text,
                 quote_text=quote,
@@ -286,8 +321,8 @@ class ChatUI:
         self.page.open(ft.SnackBar(content=ft.Text(text), duration=2000))
         self.page.update()
 
-    def scroll_to_bottom(self):
-        self.messages_column.scroll_to(offset=-1, duration=300)
+    def scroll_to_bottom(self, animated: bool = True):
+        self.messages_column.scroll_to(offset=-1, duration=200 if animated else 0)
 
     def add_message_to_chat(self, widget):
         self.messages_column.controls.append(widget)
@@ -1083,29 +1118,22 @@ class ChatUI:
 
     def poll_queue(self):
         """Опрашивает очередь входящих сообщений каждые 0.5 с."""
-        # FIX 1+4: если соединение закрыто — прекращаем опрос
-        if not conn.running:
-            return
-
         had_new = False
         try:
             while not conn.message_queue.empty():
                 msg       = conn.message_queue.get_nowait()
                 sender_id = str(msg.get("sender_id", ""))
                 if msg.get("type") == "file":
-                    # FIX 2: блокировка — файлы тоже не показываем и не сохраняем
                     if not self.is_blocked[0]:
                         self.handle_incoming_file(msg)
                         had_new = True
                 else:
                     text     = msg.get("message")
                     in_quote = msg.get("reply_to")
-                    # FIX 2: сравниваем как строки (sender_id может быть int)
-                    if (text and sender_id == str(self.CONTACT_USER["id"])):
+                    if text and sender_id == str(self.CONTACT_USER["id"]):
                         if self.is_blocked[0]:
-                            # FIX 2: заблокирован — не показываем и не сохраняем
+                            # заблокирован — не показываем и не сохраняем
                             continue
-                        # FIX 4: _save_text_msg возвращает None если дубликат
                         db_id = self._save_text_msg(text, is_user=False, quote=in_quote)
                         if db_id is not None:
                             widget = self.create_text_message(text, is_user=False,
@@ -1116,7 +1144,7 @@ class ChatUI:
         except queue.Empty:
             pass
 
-        # FIX 5: скроллим вниз только если было новое сообщение, не каждые 0.5с
+        # скроллим вниз только если было новое сообщение
         if had_new:
             try:
                 self.messages_column.update()
@@ -1125,6 +1153,7 @@ class ChatUI:
             except Exception:
                 pass
 
+        # продолжаем опрос всегда — соединение может появиться позже
         threading.Timer(0.5, self.poll_queue).start()
 
     # ── Голосовые сообщения ───────────────────────────────────────────────────
@@ -1436,6 +1465,7 @@ class ChatUI:
 
         def toggle_block(e):
             self.is_blocked[0] = not self.is_blocked[0]
+            self._write_blocked_to_db(self.is_blocked[0])
             _update_block_btn()
             self._apply_block_state()
             self._rebuild_popup_menu()
@@ -1538,6 +1568,7 @@ class ChatUI:
 
     def _toggle_block_from_menu(self):
         self.is_blocked[0] = not self.is_blocked[0]
+        self._write_blocked_to_db(self.is_blocked[0])
         self._apply_block_state()
         self.show_snack(
             "🚫 Пользователь заблокирован"

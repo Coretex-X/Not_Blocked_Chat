@@ -1,6 +1,6 @@
 import flet as ft
 import path
-from . import notification_bridge  # посредник вместо прямого импорта main
+from . import notification_bridge
 from .components.database import (
     init_database, load_contacts, load_chats,
     get_user_data, load_favorite_chats, get_contact_display_name,
@@ -13,7 +13,6 @@ from .components.handlers import setup_handlers
 def main_menu(page: ft.Page) -> ft.View:
     db = f"{path.db_path()}user_data.db"
     init_database(db)
-
     page.title = "Not Blocked Chat"
 
     contacts  = load_contacts(db)
@@ -21,7 +20,6 @@ def main_menu(page: ft.Page) -> ft.View:
     user_data = get_user_data(db)
 
     exit_dlg = create_exit_dialog()
-
     (contact_dialog, contact_list, search_field,
      loading_container, search_result_container,
      not_saved_col, saved_col, delete_btn_row) = create_contact_dialog()
@@ -30,27 +28,23 @@ def main_menu(page: ft.Page) -> ft.View:
     favorites_col = ft.Column(scroll=ft.ScrollMode.ADAPTIVE, spacing=2, expand=True)
     contacts_col  = ft.Column(scroll=ft.ScrollMode.ADAPTIVE, spacing=2, expand=True)
 
-    new_chat_fab = ft.FloatingActionButton(
-        icon=ft.Icons.CHAT, tooltip="Новый чат", mini=True, on_click=None)
-    new_group_fab = ft.FloatingActionButton(
-        icon=ft.Icons.GROUP_ADD, tooltip="Новая группа", mini=True, on_click=None)
+    new_chat_fab  = ft.FloatingActionButton(icon=ft.Icons.CHAT,      tooltip="Новый чат",   mini=True)
+    new_group_fab = ft.FloatingActionButton(icon=ft.Icons.GROUP_ADD, tooltip="Новая группа", mini=True)
 
     def _contact_status_map():
-        fresh_contacts = load_contacts(db)
-        return {c["id"]: c.get("status_user_contact", "save_user") for c in fresh_contacts}
+        return {c["id"]: c.get("status_user_contact", "save_user") for c in load_contacts(db)}
 
-    def _make_chat_item(chat, status_map):
-        display  = dict(chat)
-        cid      = chat.get("contact_id")
+    def _make_chat_item(chat, smap):
+        display = dict(chat)
+        cid = chat.get("contact_id")
         if cid:
             display["name"] = get_contact_display_name(db, cid)
-        c_status = status_map.get(cid, "save_user")
         return create_chat_item(
             display,
             lambda cid=chat["id"]: handlers['open_existing_chat'](cid),
             on_menu_handler=lambda cid=chat["id"], action=None:
                 handlers['handle_chat_menu'](cid, action, update_chats_list),
-            contact_status=c_status,
+            contact_status=smap.get(cid, "save_user"),
         )
 
     def _empty(icon, text, hint=""):
@@ -75,13 +69,10 @@ def main_menu(page: ft.Page) -> ft.View:
                 chats_col.controls.append(_make_chat_item(chat, smap))
         else:
             chats_col.controls.append(
-                _empty(ft.Icons.CHAT, "Нет чатов",
-                       "Начните новый чат, нажав кнопку ниже"))
+                _empty(ft.Icons.CHAT, "Нет чатов", "Начните новый чат, нажав кнопку ниже"))
         update_favorites_list()
-        try:
-            page.update()
-        except Exception:
-            pass
+        try: page.update()
+        except Exception: pass
 
     def update_favorites_list():
         favs = load_favorite_chats(db)
@@ -94,10 +85,8 @@ def main_menu(page: ft.Page) -> ft.View:
             favorites_col.controls.append(
                 _empty(ft.Icons.STAR_OUTLINE, "Нет избранных чатов",
                        "Удерживайте чат, чтобы добавить в избранное"))
-        try:
-            page.update()
-        except Exception:
-            pass
+        try: page.update()
+        except Exception: pass
 
     def update_contacts_tab():
         nonlocal contacts
@@ -108,28 +97,13 @@ def main_menu(page: ft.Page) -> ft.View:
         else:
             for c in contacts:
                 contacts_col.controls.append(
-                    create_contact_item(
-                        c,
+                    create_contact_item(c,
                         lambda e, cid=c["id"], cname=c["username"]:
                             handlers['create_chat_with_contact'](
                                 cid, cname, update_chats_list,
-                                handlers['open_existing_chat'], contact_dialog
-                            )
-                    )
-                )
-        try:
-            page.update()
-        except Exception:
-            pass
-
-    # Регистрируем колбэк через посредника — без импорта main
-    def _on_new_message(chat_id: int):
-        try:
-            update_chats_list()
-        except Exception as ex:
-            print(f"[УВЕДОМЛЕНИЕ] Ошибка обновления: {ex}")
-
-    notification_bridge.set_notification_callback(_on_new_message)
+                                handlers['open_existing_chat'], contact_dialog)))
+        try: page.update()
+        except Exception: pass
 
     handlers = setup_handlers(
         page=page, db_path=db, contacts=contacts, chats=chats,
@@ -144,20 +118,17 @@ def main_menu(page: ft.Page) -> ft.View:
         handlers['show_contact_selection'](
             e, contact_dialog, contact_list, search_field, contacts,
             lambda cid, cname: handlers['create_chat_with_contact'](
-                cid, cname, update_chats_list, handlers['open_existing_chat'], contact_dialog
-            ),
+                cid, cname, update_chats_list, handlers['open_existing_chat'], contact_dialog),
             loading_container, search_result_container,
-            not_saved_col=not_saved_col,
-            saved_col=saved_col,
-            delete_btn_row=delete_btn_row,
+            not_saved_col=not_saved_col, saved_col=saved_col, delete_btn_row=delete_btn_row,
         )
 
     new_chat_fab.on_click  = open_new_chat_dialog
     new_group_fab.on_click = handlers['soon_popup']
 
     appbar = ft.AppBar(
-        leading=ft.Image(src="image/not_blocked_chat.ico",
-                         width=10, height=10, fit=ft.ImageFit.CONTAIN),
+        leading=ft.Image(src="image/not_blocked_chat.ico", width=10, height=10,
+                         fit=ft.ImageFit.CONTAIN),
         leading_width=40,
         title=ft.Text("Not Blocked Chat", weight=ft.FontWeight.BOLD),
         center_title=False,
@@ -179,45 +150,33 @@ def main_menu(page: ft.Page) -> ft.View:
             ft.PopupMenuItem(),
             ft.PopupMenuItem(
                 content=ft.Row([ft.Icon(ft.Icons.CHAT, size=20), ft.Text('Новый чат')], spacing=10),
-                on_click=open_new_chat_dialog,
-            ),
+                on_click=open_new_chat_dialog),
             ft.PopupMenuItem(
                 content=ft.Row([ft.Icon(ft.Icons.GROUP_ADD, size=20), ft.Text('Новая группа')], spacing=10),
-                on_click=handlers['soon_popup'],
-            ),
+                on_click=handlers['soon_popup']),
             ft.PopupMenuItem(),
             ft.PopupMenuItem(
-                content=ft.Row([ft.Icon(ft.Icons.SETTINGS_OUTLINED, size=20),
-                                ft.Text("Настройки")], spacing=10),
-                on_click=lambda _: page.go('/settings'),
-            ),
+                content=ft.Row([ft.Icon(ft.Icons.SETTINGS_OUTLINED, size=20), ft.Text("Настройки")], spacing=10),
+                on_click=lambda _: page.go('/settings')),
             ft.PopupMenuItem(),
             ft.PopupMenuItem(
                 content=ft.Row([ft.Icon(ft.Icons.LOGOUT, size=20), ft.Text("Выйти")], spacing=10),
-                on_click=lambda _: handlers['open_dialog'](_, exit_dlg),
-            ),
+                on_click=lambda _: handlers['open_dialog'](_, exit_dlg)),
         ])],
     )
 
     tabs = ft.Tabs(
-        selected_index=0,
-        animation_duration=300,
-        expand=True,
+        selected_index=0, animation_duration=300, expand=True,
         tab_alignment=ft.TabAlignment.FILL,
         tabs=[
-            ft.Tab(
-                text="Чаты", icon=ft.Icons.CHAT,
+            ft.Tab(text="Чаты", icon=ft.Icons.CHAT,
                 content=ft.Container(
                     content=ft.Column([
                         chats_col,
                         ft.Row([new_chat_fab], alignment=ft.MainAxisAlignment.END),
                     ], expand=True, spacing=4),
-                    padding=ft.padding.symmetric(horizontal=5, vertical=10),
-                    expand=True,
-                ),
-            ),
-            ft.Tab(
-                text="Группы", icon=ft.Icons.GROUP,
+                    padding=ft.padding.symmetric(horizontal=5, vertical=10), expand=True)),
+            ft.Tab(text="Группы", icon=ft.Icons.GROUP,
                 content=ft.Container(
                     content=ft.Column([
                         ft.Container(
@@ -225,29 +184,21 @@ def main_menu(page: ft.Page) -> ft.View:
                                 ft.Icon(ft.Icons.GROUP, size=50, color=ft.Colors.GREY),
                                 ft.Text("Группы появятся здесь", size=16, color=ft.Colors.GREY),
                             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=20),
-                            alignment=ft.alignment.center, expand=True,
-                        ),
+                            alignment=ft.alignment.center, expand=True),
                         ft.Row([new_group_fab], alignment=ft.MainAxisAlignment.END),
                     ], expand=True, spacing=4),
-                    padding=ft.padding.all(10), expand=True,
-                ),
-            ),
-            ft.Tab(
-                text="Избранное", icon=ft.Icons.STAR,
-                content=ft.Container(
-                    content=favorites_col,
-                    padding=ft.padding.symmetric(horizontal=5, vertical=10),
-                    expand=True,
-                ),
-            ),
+                    padding=ft.padding.all(10), expand=True)),
+            ft.Tab(text="Избранное", icon=ft.Icons.STAR,
+                content=ft.Container(content=favorites_col,
+                    padding=ft.padding.symmetric(horizontal=5, vertical=10), expand=True)),
         ],
     )
 
     update_chats_list()
 
-    return ft.View(
-        "/",
-        [tabs, exit_dlg, contact_dialog],
-        appbar=appbar,
-        padding=0,
-    )
+    # Регистрируем колбэк для обновления списка чатов при уведомлении
+    notification_bridge.set_notification_callback(lambda chat_id: update_chats_list())
+
+    view = ft.View("/", [tabs, exit_dlg, contact_dialog], appbar=appbar, padding=0)
+    view._update_chats = update_chats_list  # main.py может вызвать напрямую
+    return view
